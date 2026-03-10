@@ -48,25 +48,27 @@ This creates a virtual environment and installs everything automatically from `p
 uv run marimo run scripts/<script_name>.py
 ```
 
-Can also edit notebooks with:
+For example:
+
+```bash
+uv run marimo run scripts/gnss_data_viewer.py
+```
+
+This opens a read-only view of the notebook in your browser.
+
+### Editing notebooks
 
 ```bash
 uv run marimo edit scripts/<script_name>.py
 ```
 
-For example:
-
-```bash
-uv run marimo edit scripts/gnss_data_viewer.py
-```
-
-This opens the notebook in your browser. To run without the editor UI use `marimo run` instead of `marimo edit`.
+This opens the notebook editor in your browser.
 
 ## Project structure
 
 ```
 analysis/
-├── data/
+├── data/                                  # Not tracked by git (too large)
 │   ├── experimental/
 │   │   ├── Sheep_Experimental_Data.xlsx   # Source trial metadata
 │   │   └── Sheep_Trial_Data.csv           # Cleaned combined trials
@@ -76,8 +78,6 @@ analysis/
 │   │   └── field_merged/                  # Merged field data
 │   └── fitted_reward_sites.csv            # Fitted reward-site coordinates
 ├── scripts/                               # Marimo notebooks
-├── analysis_script.md
-├── reward_site_identification.md
-├── reward_sites.md
+├── reward_sites.md                        # Reward site numbering reference
 └── README.md
 ```

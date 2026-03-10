@@ -1,0 +1,15 @@
+# Data files (too large for git)
+data/
+
+# Virtual environment
+.venv/
+
+# Python
+__pycache__/
+*.pyc
+
+# uv
+uv.lock
+
+# Marimo session files
+__marimo__/
