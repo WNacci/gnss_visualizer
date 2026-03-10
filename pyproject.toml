@@ -1,0 +1,14 @@
+[project]
+name = "gps-analysis"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "marimo>=0.19.6",
+    "pandas",
+    "numpy",
+    "geopandas",
+    "lonboard",
+    "shapely",
+    "openpyxl",
+    "pyarrow>=23.0.1",
+]
