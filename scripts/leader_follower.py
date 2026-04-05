@@ -30,18 +30,19 @@ def _():
     import matplotlib.pyplot as plt
     import marimo as mo
     from analysis_utils import (
-        build_trials, load_gnss_date, build_arena_transforms,
+        build_trials, build_gps_cache, load_gnss_date, build_arena_transforms,
         load_trial_tracks, detect_site_visits, DATA_DIR,
     )
 
     TRIALS = build_trials()
     ARENA_TRANSFORMS = build_arena_transforms()
-    print(f"Loaded {len(TRIALS)} trials")
+    print(f"Loaded {len(TRIALS)} trials — building GPS cache (runs once)…")
+    GPS_CACHE = build_gps_cache(TRIALS)
     return (
         np, pd, plt, mo, matplotlib,
         build_trials, load_gnss_date, build_arena_transforms,
         load_trial_tracks, detect_site_visits, DATA_DIR,
-        TRIALS, ARENA_TRANSFORMS,
+        TRIALS, ARENA_TRANSFORMS, GPS_CACHE,
     )
 
 
@@ -82,7 +83,7 @@ def _(TRIALS, mo):
 @app.cell(hide_code=True)
 def _(
     trial_selector, TRIALS, mo,
-    load_gnss_date, load_trial_tracks, detect_site_visits,
+    GPS_CACHE, load_trial_tracks, detect_site_visits,
     ARENA_TRANSFORMS, DATA_DIR,
     np, pd, plt,
     radius_slider, smooth_slider,
@@ -95,9 +96,8 @@ def _(
     _radius = radius_slider.value
     _smooth_s = smooth_slider.value
 
-    _gnss = load_gnss_date(_trial['date'])
     _tracks = load_trial_tracks(
-        _trial, gnss_cache={_trial['date']: _gnss},
+        _trial, gnss_cache=GPS_CACHE,
         apply_orient=False, arena_transforms=ARENA_TRANSFORMS,
     )
 
@@ -270,14 +270,13 @@ def _(
 
     _fig.suptitle(f"Leader-follower dynamics — {_trial['name']}", fontsize=11)
     _fig.tight_layout()
-    plt.close(_fig)
 
     _pioneer_df = pd.DataFrame(_pioneer_rows) if _pioneer_rows else pd.DataFrame(
         columns=['Site', 'Pioneer sheep', 'Entry time (min)']
     )
 
     mo.vstack([
-        mo.mpl.interactive(_fig),
+        _fig,
         mo.md(
             f"**Normalised leadership entropy:** {_norm_entropy:.3f}  "
             f"(0 = one sheep always leads; 1 = leadership equally shared)  \n"
@@ -298,7 +297,7 @@ def _(mo):
 @app.cell(hide_code=True)
 def _(
     TRIALS, mo,
-    load_gnss_date, load_trial_tracks, ARENA_TRANSFORMS,
+    GPS_CACHE, load_trial_tracks, ARENA_TRANSFORMS,
     np, pd, plt,
 ):
     """Compute leadership entropy for every multi-sheep test trial."""
@@ -311,9 +310,8 @@ def _(
         if _trial['config'] not in _TEST_CONFIGS:
             continue
 
-        _gnss = load_gnss_date(_trial['date'])
         _tracks = load_trial_tracks(
-            _trial, gnss_cache={_trial['date']: _gnss},
+            _trial, gnss_cache=GPS_CACHE,
             apply_orient=False, arena_transforms=ARENA_TRANSFORMS,
         )
         if len(_tracks) < 2:
@@ -391,10 +389,9 @@ def _(
 
     _fig2.suptitle("Leadership consistency across test trials")
     _fig2.tight_layout()
-    plt.close(_fig2)
 
     mo.vstack([
-        mo.mpl.interactive(_fig2),
+        _fig2,
         mo.md("### Per-trial leadership table"),
         mo.ui.table(_agg_df),
     ])

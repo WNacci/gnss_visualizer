@@ -34,19 +34,20 @@ def _():
     import marimo as mo
     from concurrent.futures import ThreadPoolExecutor
     from analysis_utils import (
-        build_trials, load_gnss_date, build_arena_transforms,
+        build_trials, build_gps_cache, load_gnss_date, build_arena_transforms,
         load_trial_tracks, CONFIG_TRANSFORMS, SITE_GRID,
         apply_orientation,
     )
 
     TRIALS = build_trials()
     ARENA_TRANSFORMS = build_arena_transforms()
-    print(f"Loaded {len(TRIALS)} trials")
+    print(f"Loaded {len(TRIALS)} trials — building GPS cache (runs once)…")
+    GPS_CACHE = build_gps_cache(TRIALS)
     return (
         np, pd, plt, mo, matplotlib, ThreadPoolExecutor,
         build_trials, load_gnss_date, build_arena_transforms,
         load_trial_tracks, CONFIG_TRANSFORMS, SITE_GRID, apply_orientation,
-        TRIALS, ARENA_TRANSFORMS,
+        TRIALS, ARENA_TRANSFORMS, GPS_CACHE,
     )
 
 
@@ -82,7 +83,7 @@ def _(mo):
 @app.cell(hide_code=True)
 def _(
     TRIALS, phase_radio, groupsize_multi, assay_multi,
-    load_gnss_date, load_trial_tracks, ARENA_TRANSFORMS,
+    GPS_CACHE, load_trial_tracks, ARENA_TRANSFORMS,
     np, mo,
 ):
     """Load GPS data for all filtered trials and bin into per-config arrays."""
@@ -111,9 +112,8 @@ def _(
         if _assays is not None and str(_trial['assay']) not in _assays:
             continue
 
-        _gnss = load_gnss_date(_trial['date'])
         _tracks = load_trial_tracks(
-            _trial, gnss_cache={_trial['date']: _gnss},
+            _trial, gnss_cache=GPS_CACHE,
             apply_orient=False, arena_transforms=ARENA_TRANSFORMS,
         )
         if not _tracks:
@@ -204,9 +204,7 @@ def _(config_points_raw, config_points_ori, bins_slider, SITE_GRID, np, plt, mo)
         fontsize=11, y=1.01,
     )
     _fig.tight_layout()
-    plt.close(_fig)
-    mo.mpl.interactive(_fig)
-    return
+    _fig
 
 
 if __name__ == "__main__":

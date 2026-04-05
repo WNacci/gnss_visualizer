@@ -27,19 +27,20 @@ def _():
     from matplotlib.colors import to_rgba
     import marimo as mo
     from analysis_utils import (
-        build_trials, load_gnss_date, build_arena_transforms,
+        build_trials, build_gps_cache, load_gnss_date, build_arena_transforms,
         load_trial_tracks, detect_site_visits, SITE_LABELS, DATA_DIR,
     )
 
     TRIALS = build_trials()
     ARENA_TRANSFORMS = build_arena_transforms()
 
-    print(f"Loaded {len(TRIALS)} trials")
+    print(f"Loaded {len(TRIALS)} trials — building GPS cache (runs once)…")
+    GPS_CACHE = build_gps_cache(TRIALS)
     return (
         np, pd, plt, mo, mpatches, to_rgba, matplotlib,
         build_trials, load_gnss_date, build_arena_transforms,
         load_trial_tracks, detect_site_visits, SITE_LABELS, DATA_DIR,
-        TRIALS, ARENA_TRANSFORMS,
+        TRIALS, ARENA_TRANSFORMS, GPS_CACHE,
     )
 
 
@@ -84,7 +85,7 @@ def _(TRIALS, mo):
 @app.cell(hide_code=True)
 def _(
     trial_selector, TRIALS, mo,
-    load_gnss_date, load_trial_tracks, detect_site_visits,
+    GPS_CACHE, load_trial_tracks, detect_site_visits,
     ARENA_TRANSFORMS, DATA_DIR, np, pd,
     radius_slider, bin_size_slider, smooth_slider,
     plt, mpatches,
@@ -99,9 +100,8 @@ def _(
     _smooth = smooth_slider.value
 
     # Load GPS data
-    _gnss = load_gnss_date(_trial['date'])
     _tracks = load_trial_tracks(
-        _trial, gnss_cache={_trial['date']: _gnss},
+        _trial, gnss_cache=GPS_CACHE,
         apply_orient=False, arena_transforms=ARENA_TRANSFORMS,
     )
 
@@ -203,9 +203,8 @@ def _(
     )
     _fig.suptitle(_title, fontsize=11, y=1.01)
     _fig.tight_layout()
-    plt.close(_fig)
 
-    mo.mpl.interactive(_fig)
+    _fig
     return
 
 
@@ -224,7 +223,7 @@ def _():
 @app.cell(hide_code=True)
 def _(
     trial_selector, TRIALS, mo,
-    load_gnss_date, load_trial_tracks, detect_site_visits,
+    GPS_CACHE, load_trial_tracks, detect_site_visits,
     ARENA_TRANSFORMS, DATA_DIR, np, pd, plt,
 ):
     """Summary table: which sites were visited, when, and by which sheep."""
@@ -234,9 +233,8 @@ def _(
     _tidx = trial_selector.value
     _trial = TRIALS[_tidx]
 
-    _gnss = load_gnss_date(_trial['date'])
     _tracks = load_trial_tracks(
-        _trial, gnss_cache={_trial['date']: _gnss},
+        _trial, gnss_cache=GPS_CACHE,
         apply_orient=False, arena_transforms=ARENA_TRANSFORMS,
     )
     if not _tracks:

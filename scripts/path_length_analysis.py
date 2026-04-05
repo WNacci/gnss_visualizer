@@ -26,7 +26,7 @@ def _():
     import matplotlib.pyplot as plt
     import marimo as mo
     from analysis_utils import (
-        build_trials, load_gnss_date, build_arena_transforms,
+        build_trials, build_gps_cache, load_gnss_date, build_arena_transforms,
         load_trial_tracks, detect_site_visits, cumulative_path_length,
         DATA_DIR,
     )
@@ -34,7 +34,8 @@ def _():
     TRIALS = build_trials()
     ARENA_TRANSFORMS = build_arena_transforms()
 
-    print(f"Loaded {len(TRIALS)} trials")
+    print(f"Loaded {len(TRIALS)} trials — building GPS cache (runs once)…")
+    GPS_CACHE = build_gps_cache(TRIALS)
     return (
         np, pd, plt, mo, matplotlib,
         build_trials, load_gnss_date, build_arena_transforms,
@@ -81,7 +82,7 @@ def _(TRIALS, mo):
 @app.cell(hide_code=True)
 def _(
     trial_selector, TRIALS, mo,
-    load_gnss_date, load_trial_tracks, detect_site_visits,
+    GPS_CACHE, load_trial_tracks, detect_site_visits,
     cumulative_path_length, ARENA_TRANSFORMS, DATA_DIR,
     np, pd, plt,
     radius_slider, dwell_slider, n_sites_to_find,
@@ -95,9 +96,8 @@ def _(
     _min_dwell = dwell_slider.value
     _n_needed = n_sites_to_find.value
 
-    _gnss = load_gnss_date(_trial['date'])
     _tracks = load_trial_tracks(
-        _trial, gnss_cache={_trial['date']: _gnss},
+        _trial, gnss_cache=GPS_CACHE,
         apply_orient=False, arena_transforms=ARENA_TRANSFORMS,
     )
     if not _tracks:
@@ -205,10 +205,9 @@ def _(
         fontsize=11,
     )
     _fig.tight_layout()
-    plt.close(_fig)
 
     mo.vstack([
-        mo.mpl.interactive(_fig),
+        _fig,
         mo.md("### Per-sheep summary"),
         mo.ui.table(pd.DataFrame(_summary_rows)),
     ])
@@ -218,7 +217,7 @@ def _(
 @app.cell(hide_code=True)
 def _(
     TRIALS, mo,
-    load_gnss_date, load_trial_tracks, detect_site_visits,
+    GPS_CACHE, load_trial_tracks, detect_site_visits,
     cumulative_path_length, ARENA_TRANSFORMS, DATA_DIR,
     np, pd, plt,
 ):
@@ -233,7 +232,7 @@ def _(
 @app.cell(hide_code=True)
 def _(
     TRIALS, mo,
-    load_gnss_date, load_trial_tracks, detect_site_visits,
+    GPS_CACHE, load_trial_tracks, detect_site_visits,
     cumulative_path_length, ARENA_TRANSFORMS, DATA_DIR,
     np, pd, plt,
 ):
@@ -244,9 +243,8 @@ def _(
     for _tidx, _trial in enumerate(TRIALS):
         if _trial['config'] not in _TEST_CONFIGS:
             continue
-        _gnss = load_gnss_date(_trial['date'])
         _tracks = load_trial_tracks(
-            _trial, gnss_cache={_trial['date']: _gnss},
+            _trial, gnss_cache=GPS_CACHE,
             apply_orient=False, arena_transforms=ARENA_TRANSFORMS,
         )
         if not _tracks:
@@ -314,10 +312,9 @@ def _(
 
     _fig2.suptitle("Path length / completion time across all test trials  (radius=0.5, dwell≥5 s)")
     _fig2.tight_layout()
-    plt.close(_fig2)
 
     mo.vstack([
-        mo.mpl.interactive(_fig2),
+        _fig2,
         mo.md("### Aggregate table"),
         mo.ui.table(_agg_df),
     ])

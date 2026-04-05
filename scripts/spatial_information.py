@@ -30,13 +30,14 @@ def _():
     import matplotlib.pyplot as plt
     import marimo as mo
     from analysis_utils import (
-        build_trials, load_gnss_date, build_arena_transforms,
+        build_trials, build_gps_cache, load_gnss_date, build_arena_transforms,
         load_trial_tracks,
     )
 
     TRIALS = build_trials()
     ARENA_TRANSFORMS = build_arena_transforms()
-    print(f"Loaded {len(TRIALS)} trials")
+    print(f"Loaded {len(TRIALS)} trials — building GPS cache (runs once)…")
+    GPS_CACHE = build_gps_cache(TRIALS)
     return (
         np, pd, plt, mo, matplotlib,
         build_trials, load_gnss_date, build_arena_transforms,
@@ -80,7 +81,7 @@ def _(TRIALS, mo):
 @app.cell(hide_code=True)
 def _(
     trial_selector, TRIALS, mo,
-    load_gnss_date, load_trial_tracks, ARENA_TRANSFORMS,
+    GPS_CACHE, load_trial_tracks, ARENA_TRANSFORMS,
     np, pd, plt,
     grid_res_slider, window_slider,
 ):
@@ -93,9 +94,8 @@ def _(
     _win_s = window_slider.value          # seconds
     _win_min = _win_s / 60.0
 
-    _gnss = load_gnss_date(_trial['date'])
     _tracks = load_trial_tracks(
-        _trial, gnss_cache={_trial['date']: _gnss},
+        _trial, gnss_cache=GPS_CACHE,
         apply_orient=False, arena_transforms=ARENA_TRANSFORMS,
     )
     if not _tracks:
@@ -249,9 +249,7 @@ def _(
         fontsize=11,
     )
     _fig.tight_layout()
-    plt.close(_fig)
-    mo.mpl.interactive(_fig)
-    return
+    _fig
 
 
 @app.cell(hide_code=True)
@@ -263,7 +261,7 @@ def _(mo):
 @app.cell(hide_code=True)
 def _(
     TRIALS, mo,
-    load_gnss_date, load_trial_tracks, ARENA_TRANSFORMS,
+    GPS_CACHE, load_trial_tracks, ARENA_TRANSFORMS,
     np, pd, plt,
 ):
     """Aggregate spatial entropy and revisit rate across all test trials."""
@@ -280,9 +278,8 @@ def _(
     for _tidx, _trial in enumerate(TRIALS):
         if _trial['config'] not in _TEST_CONFIGS:
             continue
-        _gnss = load_gnss_date(_trial['date'])
         _tracks = load_trial_tracks(
-            _trial, gnss_cache={_trial['date']: _gnss},
+            _trial, gnss_cache=GPS_CACHE,
             apply_orient=False, arena_transforms=ARENA_TRANSFORMS,
         )
         if not _tracks:
@@ -353,10 +350,9 @@ def _(
 
     _fig2.suptitle(f"Spatial information across test trials (grid={_RES}×{_RES})")
     _fig2.tight_layout()
-    plt.close(_fig2)
 
     mo.vstack([
-        mo.mpl.interactive(_fig2),
+        _fig2,
         mo.md("### Per-trial table"),
         mo.ui.table(_agg_df),
     ])

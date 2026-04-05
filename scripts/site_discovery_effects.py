@@ -30,14 +30,15 @@ def _():
     import matplotlib.pyplot as plt
     import marimo as mo
     from analysis_utils import (
-        build_trials, load_gnss_date, build_arena_transforms,
+        build_trials, build_gps_cache, load_gnss_date, build_arena_transforms,
         load_trial_tracks, detect_site_visits, cumulative_path_length,
         DATA_DIR, SITE_GRID,
     )
 
     TRIALS = build_trials()
     ARENA_TRANSFORMS = build_arena_transforms()
-    print(f"Loaded {len(TRIALS)} trials")
+    print(f"Loaded {len(TRIALS)} trials — building GPS cache (runs once)…")
+    GPS_CACHE = build_gps_cache(TRIALS)
     return (
         np, pd, plt, mo, matplotlib,
         build_trials, load_gnss_date, build_arena_transforms,
@@ -80,7 +81,7 @@ def _(TRIALS, mo):
 @app.cell(hide_code=True)
 def _(
     trial_selector, TRIALS, mo,
-    load_gnss_date, load_trial_tracks, detect_site_visits,
+    GPS_CACHE, load_trial_tracks, detect_site_visits,
     ARENA_TRANSFORMS, DATA_DIR, SITE_GRID,
     np, pd, plt,
     radius_slider, smooth_slider,
@@ -95,9 +96,8 @@ def _(
     _smooth_s = smooth_slider.value
     _smooth_min = _smooth_s / 60.0
 
-    _gnss = load_gnss_date(_trial['date'])
     _tracks = load_trial_tracks(
-        _trial, gnss_cache={_trial['date']: _gnss},
+        _trial, gnss_cache=GPS_CACHE,
         apply_orient=False, arena_transforms=ARENA_TRANSFORMS,
     )
     if not _tracks:
@@ -190,9 +190,7 @@ def _(
         fontsize=11, y=1.01,
     )
     _fig.tight_layout()
-    plt.close(_fig)
-    mo.mpl.interactive(_fig)
-    return
+    _fig
 
 
 @app.cell(hide_code=True)
@@ -204,7 +202,7 @@ def _(mo):
 @app.cell(hide_code=True)
 def _(
     trial_selector, TRIALS, mo,
-    load_gnss_date, load_trial_tracks, detect_site_visits,
+    GPS_CACHE, load_trial_tracks, detect_site_visits,
     cumulative_path_length, ARENA_TRANSFORMS, DATA_DIR,
     np, pd, plt,
     radius_slider, window_slider,
@@ -219,9 +217,8 @@ def _(
     _win_s = window_slider.value
     _win_min = _win_s / 60.0
 
-    _gnss = load_gnss_date(_trial['date'])
     _tracks = load_trial_tracks(
-        _trial, gnss_cache={_trial['date']: _gnss},
+        _trial, gnss_cache=GPS_CACHE,
         apply_orient=False, arena_transforms=ARENA_TRANSFORMS,
     )
     if not _tracks:
@@ -319,10 +316,9 @@ def _(
         fontsize=11,
     )
     _fig2.tight_layout()
-    plt.close(_fig2)
 
     mo.vstack([
-        mo.mpl.interactive(_fig2),
+        _fig2,
         mo.md(f"### Before/after comparison (window = {_win_s} s each side)"),
         mo.ui.table(_event_df) if not _event_df.empty else mo.md("*No data.*"),
     ])

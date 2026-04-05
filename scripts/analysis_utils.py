@@ -5,6 +5,7 @@ used by the analysis marimo scripts.
 """
 import re
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 import pandas as pd
 
@@ -54,6 +55,32 @@ def load_gnss_dir(device_dir: Path):
                     except ValueError:
                         pass
     return np.array(lats), np.array(lons), np.array(times)
+
+
+def build_gps_cache(trials: list | None = None, max_workers: int = 8) -> dict:
+    """Pre-load all GNSS data for every trial date in parallel.
+
+    Returns dict: date_str → {device_num (int) → (lats, lons, times)}.
+    Call once at notebook startup; pass the result as ``gnss_cache`` to
+    :func:`load_trial_tracks`.
+    """
+    if trials is None:
+        trials = build_trials()
+    dates = sorted({t["date"] for t in trials})
+
+    def _load(date):
+        return date, load_gnss_date(date)
+
+    cache = {}
+    with ThreadPoolExecutor(max_workers=min(max_workers, len(dates))) as pool:
+        for date, data in pool.map(_load, dates):
+            cache[date] = data
+
+    total_pts = sum(
+        len(lats) for day_data in cache.values() for (lats, _, _) in day_data.values()
+    )
+    print(f"GPS cache: {len(cache)} dates, {total_pts:,} total points")
+    return cache
 
 
 def load_gnss_date(date_str: str):
