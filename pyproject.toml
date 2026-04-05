@@ -11,4 +11,6 @@ dependencies = [
     "shapely",
     "openpyxl",
     "pyarrow>=23.0.1",
+    "matplotlib",
+    "scipy",
 ]
