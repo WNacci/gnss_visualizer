@@ -5,95 +5,36 @@ app = marimo.App(width="full")
 
 
 @app.cell(hide_code=True)
-def _(Path, pd):
-    # Load trial data from the cleaned CSV
-    _csv_path = str(Path(__file__).parent.parent / "data" / "experimental" / "Sheep_Trial_Data.csv")
-    _all_data = pd.read_csv(_csv_path, dtype={"Sheep ID": str})
+def _():
+    # Load trial metadata from library
+    import pandas as pd
+    from gps_analysis import build_trials, DATA_DIR
 
-    # Build device-to-sheep mappings and trial definitions from CSV
-    def _build_mappings_and_trials(df):
-        _mappings = {}
-        _trials = []
-        _trial_num = 0
-
-        # Only rows with a start_time define a trial
-        _with_start = df[df['start_time'].notna()].copy()
-
-        for (_date, _start_time, _group_num, _group_size), _group in _with_start.groupby(
-            ['date', 'start_time', 'Group #', 'Group Size'], dropna=False
-        ):
-            # Device-to-sheep mapping for this trial
-            _device_to_sheep = {}
-            for _, _row in _group.iterrows():
-                _sheep_id = _row['Sheep ID'] if pd.notna(_row['Sheep ID']) else 'Unknown'
-                if pd.notna(_row['GNSS_SN1']):
-                    _device_to_sheep[int(_row['GNSS_SN1'])] = _sheep_id
-                if pd.notna(_row['GNSS_SN2']):
-                    _device_to_sheep[int(_row['GNSS_SN2'])] = _sheep_id
-            _mappings[_trial_num] = _device_to_sheep
-
-            # Trial definition
-            _devices = sorted(set(
-                [int(v) for v in _group['GNSS_SN1'].dropna()] +
-                [int(v) for v in _group['GNSS_SN2'].dropna()]
-            ))
-            _field = str(_group['field'].iloc[0]) if pd.notna(_group['field'].iloc[0]) else 'Unknown'
-            _config = str(_group['configuration'].iloc[0]) if pd.notna(_group['configuration'].iloc[0]) else 'Unknown'
-            _g_num = int(_group_num) if pd.notna(_group_num) else 0
-            _g_size = int(_group_size) if pd.notna(_group_size) else 0
-            _assay_val = _group['assay'].iloc[0]
-            _assay = None
-            if pd.notna(_assay_val):
-                try:
-                    _assay = int(_assay_val)
-                except (ValueError, TypeError):
-                    _assay = str(_assay_val)
-            _notes_list = _group['note'].dropna().unique()
-            _notes = f"Group {_g_num}, Size {_g_size}"
-            if len(_notes_list) > 0:
-                _notes += f" - {'; '.join(_notes_list)}"
-
-            _name = f"{_date} - Field {_field}, {_config}, {_g_size} sheep"
-            _trials.append((_name, _date, _field, _config, str(_start_time), 35, _devices, _assay, _notes))
-            _trial_num += 1
-
-        return _mappings, _trials
-
-    DEVICE_TO_SHEEP, TRIALS = _build_mappings_and_trials(_all_data)
+    TRIALS = build_trials()
 
     print(f"Loading experimental data from CSV...")
     print(f"\n{'='*70}")
     print(f"Available Trials ({len(TRIALS)} total):")
     print('='*70)
     for _i, _trial in enumerate(TRIALS):
-        _name, _date, _field, _config, _start, _dur, _devs, _assay, _notes = _trial
-        _assay_str = f" [Assay {_assay}]" if _assay is not None else ""
-        print(f"  [{_i:2d}] {_notes.split(' - ')[0]:20s} {_name}{_assay_str}")
+        _assay_str = f" [Assay {_trial['assay']}]" if _trial['assay'] is not None else ""
+        print(f"  [{_i:2d}] {_trial['notes'].split(' - ')[0]:20s} {_trial['name']}{_assay_str}")
     print('='*70)
     print("\nTo select trials, use their IDs in ACTIVE_TRIALS below.")
     print("Example: ACTIVE_TRIALS = [0, 4, 10]")
 
-    # Function to convert trial info to data source format
-    def trial_to_source(trial_name, date, field, config, start_time_str, duration_min, devices, assay, notes, decimation=10):
-        """Convert trial definition to data source tuple."""
-        import pandas as pd
+    def trial_to_source(trial, decimation=10):
+        """Convert a trial dict to a data source tuple."""
+        _day = int(trial["date"].split("-")[2])
+        _path = str(DATA_DIR / "gnss" / f"{_day}-02-26")
+        _start_unix = (
+            pd.to_datetime(f"{trial['date']} {trial['start_time']}")
+            .tz_localize('Europe/Paris').tz_convert('UTC').timestamp()
+        )
+        _end_unix = _start_unix + trial["duration_min"] * 60
+        return (_path, _start_unix, _end_unix, trial["devices"], decimation)
 
-        # Construct path based on date
-        _date_parts = date.split("-")
-        _day = int(_date_parts[2])
-        _path = str(Path(__file__).parent.parent / "data" / "gnss" / f"{_day}-02-26")
-
-        # Convert Paris time to UTC Unix timestamp
-        _datetime_str = f"{date} {start_time_str}"
-        _start_paris = pd.to_datetime(_datetime_str)
-        _start_utc = _start_paris.tz_localize('Europe/Paris').tz_convert('UTC')
-        _start_unix = _start_utc.timestamp()
-
-        # Calculate end time
-        _end_unix = _start_unix + (duration_min * 60)
-
-        return (_path, _start_unix, _end_unix, devices, decimation)
-    return DEVICE_TO_SHEEP, TRIALS, trial_to_source
+    return DATA_DIR, TRIALS, pd, trial_to_source
 
 
 @app.cell(hide_code=True)
@@ -101,9 +42,8 @@ def _(TRIALS, mo):
     # Build options dict: display label -> trial index
     _options = {}
     for _i, _trial in enumerate(TRIALS):
-        _name, _date, _field, _config, _start, _dur, _devs, _assay, _notes = _trial
-        _assay_str = f" [Assay {_assay}]" if _assay is not None else ""
-        _label = f"[{_i}] {_notes.split(' - ')[0]:20s} {_name}{_assay_str}"
+        _assay_str = f" [Assay {_trial['assay']}]" if _trial['assay'] is not None else ""
+        _label = f"[{_i}] {_trial['notes'].split(' - ')[0]:20s} {_trial['name']}{_assay_str}"
         _options[_label] = _i
 
     trial_selector = mo.ui.multiselect(options=_options, label="Select trials", full_width=True)
@@ -123,25 +63,21 @@ def _(TRIALS, mo):
 
 
 @app.cell(hide_code=True)
-def _(Path, TRIALS, decimation_slider, include_field, include_field_merged, trial_to_source, trial_selector):
+def _(DATA_DIR, TRIALS, decimation_slider, include_field, include_field_merged, trial_to_source, trial_selector):
     # Convert selected trials to data sources
     DATA_SOURCES = []
     _decimation = decimation_slider.value
 
     for _trial_idx in trial_selector.value:
         _trial = TRIALS[_trial_idx]
-        # Override decimation in trial_to_source
-        _src = trial_to_source(*_trial)
-        # Replace the default decimation with user-selected value
-        DATA_SOURCES.append((_src[0], _src[1], _src[2], _src[3], _decimation))
+        _src = trial_to_source(_trial, _decimation)
+        DATA_SOURCES.append(_src)
 
     if include_field_merged.value:
-        _path = str(Path(__file__).parent.parent / "data" / "gnss" / "field_merged")
-        DATA_SOURCES.append((_path, None, None, None, _decimation))
+        DATA_SOURCES.append((str(DATA_DIR / "gnss" / "field_merged"), None, None, None, _decimation))
 
     if include_field.value:
-        _path = str(Path(__file__).parent.parent / "data" / "gnss" / "gnss_data_field")
-        DATA_SOURCES.append((_path, None, None, None, _decimation))
+        DATA_SOURCES.append((str(DATA_DIR / "gnss" / "gnss_data_field"), None, None, None, _decimation))
 
     print(f"Selected {len(DATA_SOURCES)} source(s), decimation={_decimation}")
     return (DATA_SOURCES,)
@@ -171,24 +107,7 @@ def _():
         [75, 0, 130], [220, 20, 60], [0, 139, 139], [184, 134, 11],
     ]
 
-    def load_device_data_from_dir(device_dir):
-        """Load GPS data from a device subdirectory."""
-        _lats, _lons, _times = [], [], []
-        for f in sorted(device_dir.iterdir(), key=lambda x: x.name):
-            if re.match(r"LOGS\d+\.TXT", f.name, re.IGNORECASE) and f.stat().st_size > 0:
-                for line in open(f, errors='ignore'):
-                    parts = line.split(":")
-                    if len(parts) >= 6:
-                        try:
-                            lat = float(parts[3])
-                            lon = float(parts[4])
-                            time = float(parts[5])
-                            _lats.append(lat)
-                            _lons.append(lon)
-                            _times.append(time)
-                        except ValueError:
-                            pass
-        return np.array(_lats), np.array(_lons), np.array(_times)
+    from gps_analysis import load_gnss_dir as load_device_data_from_dir
 
     def load_device_data_from_files(files):
         """Load GPS data from a list of files."""
@@ -253,11 +172,10 @@ def _():
 
 
 @app.cell(hide_code=True)
-def _(Path, PathLayer, ScatterplotLayer, gpd, np, pd):
+def _(DATA_DIR, PathLayer, ScatterplotLayer, gpd, np, pd):
     from shapely.geometry import LineString
 
-    _csv_path = str(Path(__file__).parent.parent / "data" / "fitted_reward_sites.csv")
-    reward_sites_df = pd.read_csv(_csv_path)
+    reward_sites_df = pd.read_csv(DATA_DIR / "fitted_reward_sites.csv")
 
     def build_reward_layers(field, radius, site_color, border_color):
         """Build scatterplot + border layers for a given field's reward sites."""
@@ -361,24 +279,14 @@ def _(DATA_SOURCES, Path, TRIALS, detect_format_and_load, pd, re):
     def find_trial_info(path, start_time):
         """Find trial info matching the path and start time."""
         for trial_idx, trial in enumerate(TRIALS):
-            _name, _date, _field, _config, _start_str, _dur, _devs, _assay, _notes = trial
-            _date_parts = _date.split("-")
-            _day = int(_date_parts[2])
-            _expected_path = str(Path(__file__).parent.parent / "data" / "gnss" / f"{_day}-02-26")
-
-            # Convert trial start time to unix
-            _datetime_str = f"{_date} {_start_str}"
-            _start_paris = pd.to_datetime(_datetime_str)
-            _start_utc = _start_paris.tz_localize('Europe/Paris').tz_convert('UTC')
-            _start_unix = _start_utc.timestamp()
-
-            if path == _expected_path and abs(start_time - _start_unix) < 60:  # Within 1 minute
-                # Extract group number and size from notes
-                _group_match = re.search(r'Group (\d+)', _notes)
-                _size_match = re.search(r'Size (\d+)', _notes)
-                _group_num = int(_group_match.group(1)) if _group_match else None
-                _group_size = int(_size_match.group(1)) if _size_match else None
-                return _name, _assay, _notes, _group_num, _group_size, trial_idx
+            _day = int(trial["date"].split("-")[2])
+            _expected_path = str(DATA_DIR / "gnss" / f"{_day}-02-26")
+            _start_unix = (
+                pd.to_datetime(f"{trial['date']} {trial['start_time']}")
+                .tz_localize('Europe/Paris').tz_convert('UTC').timestamp()
+            )
+            if path == _expected_path and abs(start_time - _start_unix) < 60:
+                return trial["name"], trial["assay"], trial["notes"], trial["group_num"], trial["group_size"], trial_idx
         return None, None, None, None, None, None
 
     # Auto-load all data sources
@@ -451,7 +359,7 @@ def _(mo):
 @app.cell(hide_code=True)
 def _(
     COLORS,
-    DEVICE_TO_SHEEP,
+    TRIALS,
     Map,
     MapViewState,
     MaplibreBasemap,
@@ -506,7 +414,7 @@ def _(
                     _dev_num = int(_dev_match.group(1)) if _dev_match else None
                     _sheep_id = 'Unknown'
                     if _src['trial_idx'] is not None and _dev_num is not None:
-                        _sheep_id = DEVICE_TO_SHEEP.get(_src['trial_idx'], {}).get(_dev_num, 'Unknown')
+                        _sheep_id = TRIALS[_src['trial_idx']]["device_to_sheep"].get(_dev_num, 'Unknown')
 
                     # Create tooltip data
                     _tooltip_data = {

@@ -13,3 +13,7 @@ uv.lock
 
 # Marimo session files
 __marimo__/
+
+# Generated figures and built artifacts
+analysis/figures/
+analysis/presentation.pdf

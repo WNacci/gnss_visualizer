@@ -8,13 +8,13 @@ app = marimo.App(width="full")
 def _():
     import pandas as pd
     import marimo as mo
-    from pathlib import Path
-    return Path, mo, pd
+    from gps_analysis import DATA_DIR
+    return DATA_DIR, mo, pd
 
 
 @app.cell
-def _(Path, pd):
-    xlsx_path = Path(__file__).parent.parent / "data" / "experimental" / "Sheep_Experimental_Data.xlsx"
+def _(DATA_DIR, pd):
+    xlsx_path = DATA_DIR / "experimental" / "Sheep_Experimental_Data.xlsx"
     xlsx = pd.ExcelFile(xlsx_path)
     sheet_names = xlsx.sheet_names
     sheet_names
@@ -51,8 +51,8 @@ def _(mo, pd, sheet_names, xlsx):
 
 
 @app.cell
-def _(Path, combined_df, mo):
-    output_path = Path(__file__).parent.parent / "data" / "experimental" / "Sheep_Trial_Data.csv"
+def _(DATA_DIR, combined_df, mo):
+    output_path = DATA_DIR / "experimental" / "Sheep_Trial_Data.csv"
     combined_df.to_csv(output_path, index=False)
     mo.md(f"**Exported to:** `{output_path}`")
     return (output_path,)

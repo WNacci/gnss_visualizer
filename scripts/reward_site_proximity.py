@@ -14,10 +14,6 @@ app = marimo.App(width="full")
 
 @app.cell(hide_code=True)
 def _():
-    import sys
-    from pathlib import Path
-    sys.path.insert(0, str(Path(__file__).parent))
-
     import numpy as np
     import pandas as pd
     import matplotlib
@@ -26,21 +22,19 @@ def _():
     import matplotlib.patches as mpatches
     from matplotlib.colors import to_rgba
     import marimo as mo
-    from analysis_utils import (
-        build_trials, build_gps_cache, load_gnss_date, build_arena_transforms,
+    from gps_analysis import (
+        build_trials, build_tracks_cache,
         load_trial_tracks, detect_site_visits, SITE_LABELS, DATA_DIR,
     )
 
     TRIALS = build_trials()
-    ARENA_TRANSFORMS = build_arena_transforms()
-
-    print(f"Loaded {len(TRIALS)} trials — building GPS cache (runs once)…")
-    GPS_CACHE = build_gps_cache(TRIALS)
+    print(f"Loaded {len(TRIALS)} trials — building tracks cache (runs once)…")
+    TRACKS_CACHE = build_tracks_cache()
     return (
         np, pd, plt, mo, mpatches, to_rgba, matplotlib,
-        build_trials, load_gnss_date, build_arena_transforms,
+        build_trials, build_tracks_cache,
         load_trial_tracks, detect_site_visits, SITE_LABELS, DATA_DIR,
-        TRIALS, ARENA_TRANSFORMS, GPS_CACHE,
+        TRIALS, TRACKS_CACHE,
     )
 
 
@@ -85,8 +79,8 @@ def _(TRIALS, mo):
 @app.cell(hide_code=True)
 def _(
     trial_selector, TRIALS, mo,
-    GPS_CACHE, load_trial_tracks, detect_site_visits,
-    ARENA_TRANSFORMS, DATA_DIR, np, pd,
+    TRACKS_CACHE, load_trial_tracks, detect_site_visits,
+    DATA_DIR, np, pd,
     radius_slider, bin_size_slider, smooth_slider,
     plt, mpatches,
 ):
@@ -101,8 +95,8 @@ def _(
 
     # Load GPS data
     _tracks = load_trial_tracks(
-        _trial, gnss_cache=GPS_CACHE,
-        apply_orient=False, arena_transforms=ARENA_TRANSFORMS,
+        _trial, tracks_cache=TRACKS_CACHE,
+        apply_orient=False,
     )
 
     if not _tracks:
@@ -150,7 +144,7 @@ def _(
     # Detect first visit times (entry into radius, sustained ≥5 s)
     _visits = detect_site_visits(
         _tracks, _trial['field'],
-        radius=_radius, min_dwell_s=5.0, reward_sites_df=_rdf,
+        radius=_radius, reward_sites_df=_rdf,
     )
     _first_visits = {}
     for _lbl, _vlist in _visits.items():
@@ -223,8 +217,8 @@ def _():
 @app.cell(hide_code=True)
 def _(
     trial_selector, TRIALS, mo,
-    GPS_CACHE, load_trial_tracks, detect_site_visits,
-    ARENA_TRANSFORMS, DATA_DIR, np, pd, plt,
+    TRACKS_CACHE, load_trial_tracks, detect_site_visits,
+    DATA_DIR, np, pd, plt,
 ):
     """Summary table: which sites were visited, when, and by which sheep."""
     if trial_selector.value is None:
@@ -234,14 +228,14 @@ def _(
     _trial = TRIALS[_tidx]
 
     _tracks = load_trial_tracks(
-        _trial, gnss_cache=GPS_CACHE,
-        apply_orient=False, arena_transforms=ARENA_TRANSFORMS,
+        _trial, tracks_cache=TRACKS_CACHE,
+        apply_orient=True,
     )
     if not _tracks:
         mo.stop(True, mo.md(""))
 
     _rdf = pd.read_csv(DATA_DIR / "fitted_reward_sites.csv")
-    _visits = detect_site_visits(_tracks, _trial['field'], radius=0.5, min_dwell_s=5.0, reward_sites_df=_rdf)
+    _visits = detect_site_visits(_tracks, _trial['field'], radius=0.5, reward_sites_df=_rdf)
 
     _rows = []
     for _lbl, _vlist in sorted(_visits.items()):
@@ -257,7 +251,7 @@ def _(
     if _rows:
         _summary_df = pd.DataFrame(_rows)
         mo.vstack([
-            mo.md("### Visit events (radius=0.5, dwell≥5 s)"),
+            mo.md("### Visit events (radius=0.5)"),
             mo.ui.table(_summary_df),
         ])
     else:

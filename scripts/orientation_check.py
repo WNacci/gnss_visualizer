@@ -22,10 +22,6 @@ app = marimo.App(width="full")
 
 @app.cell(hide_code=True)
 def _():
-    import sys
-    from pathlib import Path
-    sys.path.insert(0, str(Path(__file__).parent))
-
     import numpy as np
     import pandas as pd
     import matplotlib
@@ -33,21 +29,20 @@ def _():
     import matplotlib.pyplot as plt
     import marimo as mo
     from concurrent.futures import ThreadPoolExecutor
-    from analysis_utils import (
-        build_trials, build_gps_cache, load_gnss_date, build_arena_transforms,
+    from gps_analysis import (
+        build_trials, build_tracks_cache,
         load_trial_tracks, CONFIG_TRANSFORMS, SITE_GRID,
         apply_orientation,
     )
 
     TRIALS = build_trials()
-    ARENA_TRANSFORMS = build_arena_transforms()
-    print(f"Loaded {len(TRIALS)} trials — building GPS cache (runs once)…")
-    GPS_CACHE = build_gps_cache(TRIALS)
+    print(f"Loaded {len(TRIALS)} trials — building tracks cache (runs once)…")
+    TRACKS_CACHE = build_tracks_cache()
     return (
         np, pd, plt, mo, matplotlib, ThreadPoolExecutor,
-        build_trials, load_gnss_date, build_arena_transforms,
+        build_trials, build_tracks_cache,
         load_trial_tracks, CONFIG_TRANSFORMS, SITE_GRID, apply_orientation,
-        TRIALS, ARENA_TRANSFORMS, GPS_CACHE,
+        TRIALS, TRACKS_CACHE,
     )
 
 
@@ -83,7 +78,7 @@ def _(mo):
 @app.cell(hide_code=True)
 def _(
     TRIALS, phase_radio, groupsize_multi, assay_multi,
-    GPS_CACHE, load_trial_tracks, ARENA_TRANSFORMS,
+    TRACKS_CACHE, load_trial_tracks,
     np, mo,
 ):
     """Load GPS data for all filtered trials and bin into per-config arrays."""
@@ -96,8 +91,6 @@ def _(
     # Collect (config, gx_raw, gy_raw, gx_oriented, gy_oriented) per trial
     config_points_raw = {c: ([], []) for c in _TEST_CONFIGS}
     config_points_ori = {c: ([], []) for c in _TEST_CONFIGS}
-
-    from analysis_utils import CONFIG_TRANSFORMS, apply_orientation
 
     _loaded = 0
     for _tidx, _trial in enumerate(TRIALS):
@@ -113,8 +106,8 @@ def _(
             continue
 
         _tracks = load_trial_tracks(
-            _trial, gnss_cache=GPS_CACHE,
-            apply_orient=False, arena_transforms=ARENA_TRANSFORMS,
+            _trial, tracks_cache=TRACKS_CACHE,
+            apply_orient=False,
         )
         if not _tracks:
             continue

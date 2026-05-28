@@ -19,29 +19,24 @@ app = marimo.App(width="full")
 
 @app.cell(hide_code=True)
 def _():
-    import sys
-    from pathlib import Path
-    sys.path.insert(0, str(Path(__file__).parent))
-
     import numpy as np
     import pandas as pd
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     import marimo as mo
-    from analysis_utils import (
-        build_trials, build_gps_cache, load_gnss_date, build_arena_transforms,
+    from gps_analysis import (
+        build_trials, build_tracks_cache,
         load_trial_tracks,
     )
 
     TRIALS = build_trials()
-    ARENA_TRANSFORMS = build_arena_transforms()
-    print(f"Loaded {len(TRIALS)} trials — building GPS cache (runs once)…")
-    GPS_CACHE = build_gps_cache(TRIALS)
+    print(f"Loaded {len(TRIALS)} trials — building tracks cache (runs once)…")
+    TRACKS_CACHE = build_tracks_cache()
     return (
         np, pd, plt, mo, matplotlib,
-        build_trials, load_gnss_date, build_arena_transforms,
-        load_trial_tracks, TRIALS, ARENA_TRANSFORMS,
+        build_trials, build_tracks_cache,
+        load_trial_tracks, TRIALS, TRACKS_CACHE,
     )
 
 
@@ -81,7 +76,7 @@ def _(TRIALS, mo):
 @app.cell(hide_code=True)
 def _(
     trial_selector, TRIALS, mo,
-    GPS_CACHE, load_trial_tracks, ARENA_TRANSFORMS,
+    TRACKS_CACHE, load_trial_tracks,
     np, pd, plt,
     grid_res_slider, window_slider,
 ):
@@ -95,8 +90,8 @@ def _(
     _win_min = _win_s / 60.0
 
     _tracks = load_trial_tracks(
-        _trial, gnss_cache=GPS_CACHE,
-        apply_orient=False, arena_transforms=ARENA_TRANSFORMS,
+        _trial, tracks_cache=TRACKS_CACHE,
+        apply_orient=False,
     )
     if not _tracks:
         mo.stop(True, mo.md("*No GPS data found.*"))
@@ -261,7 +256,7 @@ def _(mo):
 @app.cell(hide_code=True)
 def _(
     TRIALS, mo,
-    GPS_CACHE, load_trial_tracks, ARENA_TRANSFORMS,
+    TRACKS_CACHE, load_trial_tracks,
     np, pd, plt,
 ):
     """Aggregate spatial entropy and revisit rate across all test trials."""
@@ -279,8 +274,8 @@ def _(
         if _trial['config'] not in _TEST_CONFIGS:
             continue
         _tracks = load_trial_tracks(
-            _trial, gnss_cache=GPS_CACHE,
-            apply_orient=False, arena_transforms=ARENA_TRANSFORMS,
+            _trial, tracks_cache=TRACKS_CACHE,
+            apply_orient=True,
         )
         if not _tracks:
             continue

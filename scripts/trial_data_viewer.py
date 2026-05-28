@@ -8,13 +8,13 @@ app = marimo.App(width="full")
 def _():
     import pandas as pd
     import marimo as mo
-    from pathlib import Path
-    return Path, mo, pd
+    from gps_analysis import DATA_DIR
+    return DATA_DIR, mo, pd
 
 
 @app.cell
-def _(Path, pd):
-    csv_path = Path(__file__).parent.parent / "data" / "experimental" / "Sheep_Trial_Data.csv"
+def _(DATA_DIR, pd):
+    csv_path = DATA_DIR / "experimental" / "Sheep_Trial_Data.csv"
     df = pd.read_csv(csv_path, dtype={"Sheep ID": str})
     df
     return csv_path, df

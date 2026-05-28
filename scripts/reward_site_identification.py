@@ -16,13 +16,16 @@ def _():
     from lonboard import Map, ScatterplotLayer
     from lonboard.basemap import MaplibreBasemap
     import marimo as mo
+    from gps_analysis import DATA_DIR, load_gnss_dir
     return (
+        DATA_DIR,
         Map,
         MaplibreBasemap,
         Path,
         ScatterplotLayer,
         datetime,
         gpd,
+        load_gnss_dir,
         mo,
         np,
         pd,
@@ -126,61 +129,19 @@ def _(
     reward_sites,
 ):
     def load_device_data(device_id):
+        """Load GPS data for a specific GNSS device from gnss_data_field.
+
+        Tries both naming formats: GNSS_01 (zero-padded) and GNSS-1 (no padding).
+        Returns (lats, lons, times) or (None, None, None) if no data found.
         """
-        Load GPS data for a specific device from Working_Data_2/gnss_data_field.
-
-        Args:
-            device_id: GNSS device number (1-16)
-
-        Returns:
-            Tuple of (lats, lons, times) as numpy arrays, or (None, None, None) if no data
-
-        Note:
-            Tries both naming formats: GNSS_01 (zero-padded) and GNSS-1 (no padding)
-        """
-        base_path = Path(__file__).parent.parent / "data" / "gnss" / "gnss_data_field"
-
-        # Try both naming formats: GNSS_01 and GNSS-1
-        device_dirs = [
-            base_path / f"GNSS_{device_id:02d}",
-            base_path / f"GNSS-{device_id}",
-        ]
-
-        device_dir = None
-        for d in device_dirs:
-            if d.exists():
-                device_dir = d
-                break
-
-        if device_dir is None:
-            print(f"Warning: No data directory found for device {device_id}")
-            return None, None, None
-
-        lats, lons, times = [], [], []
-
-        # Parse all LOGS*.TXT files in the device directory
-        for log_file in sorted(device_dir.glob("LOGS*.TXT")):
-            if log_file.stat().st_size == 0:
-                continue
-            with open(log_file, errors='ignore') as f:
-                for line in f:
-                    parts = line.strip().split(":")
-                    if len(parts) >= 6:
-                        try:
-                            lat = float(parts[3])
-                            lon = float(parts[4])
-                            timestamp = float(parts[5])
-                            lats.append(lat)
-                            lons.append(lon)
-                            times.append(timestamp)
-                        except ValueError:
-                            pass
-
-        if len(lats) == 0:
-            print(f"Warning: No data found for device {device_id}")
-            return None, None, None
-
-        return np.array(lats), np.array(lons), np.array(times)
+        base_path = DATA_DIR / "gnss" / "gnss_data_field"
+        for device_dir in [base_path / f"GNSS_{device_id:02d}", base_path / f"GNSS-{device_id}"]:
+            if device_dir.exists():
+                lats, lons, times = load_gnss_dir(device_dir)
+                if len(lats) > 0:
+                    return lats, lons, times
+        print(f"Warning: No data directory found for device {device_id}")
+        return None, None, None
 
     def filter_data_by_time(lats, lons, times, start_time, end_time):
         """Filter GPS data by Unix timestamp range."""
@@ -210,8 +171,8 @@ def _(
 
         raw_lats = lats[start_idx:]
         raw_lons = lons[start_idx:]
-        avg_lat = np.mean(raw_lats)
-        avg_lon = np.mean(raw_lons)
+        avg_lat = np.median(raw_lats)
+        avg_lon = np.median(raw_lons)
 
         return avg_lat, avg_lon, raw_lats, raw_lons
 
@@ -307,8 +268,7 @@ def _(datetime, np, pd, reward_site_locations, timezone):
         Searches through log files to find the closest GPS reading
         within the specified tolerance window.
         """
-        from pathlib import Path
-        base_path = Path(__file__).parent.parent / "data" / "gnss" / "gnss_data_field"
+        base_path = DATA_DIR / "gnss" / "gnss_data_field"
 
         device_dirs = [
             base_path / f"GNSS_{gnss_id:02d}",
@@ -667,6 +627,7 @@ def _(mo):
 
 @app.cell(hide_code=True)
 def _(
+    DATA_DIR,
     Map,
     MaplibreBasemap,
     ScatterplotLayer,
@@ -687,8 +648,6 @@ def _(
     # Load calibration movement data to establish grid axes.
     # These timestamps capture when specific GNSS devices were moved along
     # the grid axes (X and Y directions) for calibration purposes.
-
-    from pathlib import Path as _Path
 
     # Grid reference definitions: (field, axis, gnss_id, t1, t2)
     # These define line segments representing the X and Y axes of the grid
@@ -719,7 +678,7 @@ def _(
         Searches through all LOGS*.TXT files for the device to find the
         reading closest to the target time within the specified tolerance.
         """
-        _base_path = _Path(__file__).parent.parent / "data" / "gnss" / "gnss_data_field"
+        _base_path = DATA_DIR / "gnss" / "gnss_data_field"
 
         _device_dirs = [
             _base_path / f"GNSS_{gnss_id:02d}",
@@ -768,7 +727,7 @@ def _(
         Returns:
             Tuple of (lats, lons, timestamps) arrays, or (None, None, None) if no data
         """
-        _base_path = _Path(__file__).parent.parent / "data" / "gnss" / "gnss_data_field"
+        _base_path = DATA_DIR / "gnss" / "gnss_data_field"
 
         _device_dirs = [
             _base_path / f"GNSS_{gnss_id:02d}",
@@ -1466,9 +1425,8 @@ def _(mo, pd, grid_analysis):
 
 
 @app.cell
-def _(grid_analysis, pd, Path, np):
+def _(grid_analysis, pd, DATA_DIR, np):
     # Export fitted reward site locations to CSV including arena corners
-    # Path and np are already imported in the first cell and passed here
 
     # Prepare data for CSV export
     _csv_rows = []
@@ -1523,7 +1481,7 @@ def _(grid_analysis, pd, Path, np):
     # Create DataFrame and export to CSV
     # Using 9 decimal places for ~1.1mm precision (7 decimals = ~1.1cm)
     _fitted_df = pd.DataFrame(_csv_rows)
-    _csv_path = Path(__file__).parent.parent / "data" / "fitted_reward_sites.csv"
+    _csv_path = DATA_DIR / "fitted_reward_sites.csv"
     _fitted_df.to_csv(_csv_path, index=False, float_format='%.9f')
 
     print(f"✓ Exported {len(_csv_rows)} locations ({len(_csv_rows) - 8} reward sites + 8 arena corners) to: {_csv_path}")

@@ -19,31 +19,26 @@ app = marimo.App(width="full")
 
 @app.cell(hide_code=True)
 def _():
-    import sys
-    from pathlib import Path
-    sys.path.insert(0, str(Path(__file__).parent))
-
     import numpy as np
     import pandas as pd
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     import marimo as mo
-    from analysis_utils import (
-        build_trials, build_gps_cache, load_gnss_date, build_arena_transforms,
+    from gps_analysis import (
+        build_trials, build_tracks_cache,
         load_trial_tracks, detect_site_visits, cumulative_path_length,
         DATA_DIR, SITE_GRID,
     )
 
     TRIALS = build_trials()
-    ARENA_TRANSFORMS = build_arena_transforms()
-    print(f"Loaded {len(TRIALS)} trials — building GPS cache (runs once)…")
-    GPS_CACHE = build_gps_cache(TRIALS)
+    print(f"Loaded {len(TRIALS)} trials — building tracks cache (runs once)…")
+    TRACKS_CACHE = build_tracks_cache()
     return (
         np, pd, plt, mo, matplotlib,
-        build_trials, load_gnss_date, build_arena_transforms,
+        build_trials, build_tracks_cache,
         load_trial_tracks, detect_site_visits, cumulative_path_length,
-        DATA_DIR, SITE_GRID, TRIALS, ARENA_TRANSFORMS,
+        DATA_DIR, SITE_GRID, TRIALS, TRACKS_CACHE,
     )
 
 
@@ -81,8 +76,8 @@ def _(TRIALS, mo):
 @app.cell(hide_code=True)
 def _(
     trial_selector, TRIALS, mo,
-    GPS_CACHE, load_trial_tracks, detect_site_visits,
-    ARENA_TRANSFORMS, DATA_DIR, SITE_GRID,
+    TRACKS_CACHE, load_trial_tracks, detect_site_visits,
+    DATA_DIR, SITE_GRID,
     np, pd, plt,
     radius_slider, smooth_slider,
 ):
@@ -97,8 +92,8 @@ def _(
     _smooth_min = _smooth_s / 60.0
 
     _tracks = load_trial_tracks(
-        _trial, gnss_cache=GPS_CACHE,
-        apply_orient=False, arena_transforms=ARENA_TRANSFORMS,
+        _trial, tracks_cache=TRACKS_CACHE,
+        apply_orient=False,
     )
     if not _tracks:
         mo.stop(True, mo.md("*No GPS data.*"))
@@ -110,7 +105,7 @@ def _(
     ].sort_values('label').reset_index(drop=True)
 
     # Detect first visits
-    _visits = detect_site_visits(_tracks, _trial['field'], radius=_radius, min_dwell_s=5.0, reward_sites_df=_rdf)
+    _visits = detect_site_visits(_tracks, _trial['field'], radius=_radius, reward_sites_df=_rdf)
     _first_visit_t = {lbl: min(v[1] for v in vlist) for lbl, vlist in _visits.items() if vlist}
 
     _dur = _trial['duration_min']
@@ -202,8 +197,8 @@ def _(mo):
 @app.cell(hide_code=True)
 def _(
     trial_selector, TRIALS, mo,
-    GPS_CACHE, load_trial_tracks, detect_site_visits,
-    cumulative_path_length, ARENA_TRANSFORMS, DATA_DIR,
+    TRACKS_CACHE, load_trial_tracks, detect_site_visits,
+    cumulative_path_length, DATA_DIR,
     np, pd, plt,
     radius_slider, window_slider,
 ):
@@ -218,14 +213,14 @@ def _(
     _win_min = _win_s / 60.0
 
     _tracks = load_trial_tracks(
-        _trial, gnss_cache=GPS_CACHE,
-        apply_orient=False, arena_transforms=ARENA_TRANSFORMS,
+        _trial, tracks_cache=TRACKS_CACHE,
+        apply_orient=True,
     )
     if not _tracks:
         mo.stop(True, mo.md(""))
 
     _rdf = pd.read_csv(DATA_DIR / "fitted_reward_sites.csv")
-    _visits = detect_site_visits(_tracks, _trial['field'], radius=_radius, min_dwell_s=5.0, reward_sites_df=_rdf)
+    _visits = detect_site_visits(_tracks, _trial['field'], radius=_radius, reward_sites_df=_rdf)
     _first_visit_t = {lbl: min(v[1] for v in vlist) for lbl, vlist in _visits.items() if vlist}
 
     if not _first_visit_t:

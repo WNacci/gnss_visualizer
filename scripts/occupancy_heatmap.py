@@ -106,127 +106,32 @@ def _():
 
 
 @app.cell(hide_code=True)
-def _(Path, pd):
-    """Load trial metadata and build TRIALS list + DEVICE_TO_SHEEP mapping."""
-    _csv_path = str(Path(__file__).parent.parent / "data" / "experimental" / "Sheep_Trial_Data.csv")
-    _all_data = pd.read_csv(_csv_path, dtype={"Sheep ID": str})
-
-    def _build(df):
-        mappings = {}
-        trials = []
-        num = 0
-        _with_start = df[df['start_time'].notna()].copy()
-        for (_date, _start_time, _group_num, _group_size), _group in _with_start.groupby(
-            ['date', 'start_time', 'Group #', 'Group Size'], dropna=False
-        ):
-            _d2s = {}
-            for _, row in _group.iterrows():
-                _sid = row['Sheep ID'] if pd.notna(row['Sheep ID']) else 'Unknown'
-                if pd.notna(row['GNSS_SN1']):
-                    _d2s[int(row['GNSS_SN1'])] = _sid
-                if pd.notna(row['GNSS_SN2']):
-                    _d2s[int(row['GNSS_SN2'])] = _sid
-            mappings[num] = _d2s
-
-            devs = sorted(set(
-                [int(v) for v in _group['GNSS_SN1'].dropna()] +
-                [int(v) for v in _group['GNSS_SN2'].dropna()]
-            ))
-            field = str(_group['field'].iloc[0]) if pd.notna(_group['field'].iloc[0]) else 'Unknown'
-            config = str(_group['configuration'].iloc[0]) if pd.notna(_group['configuration'].iloc[0]) else 'Unknown'
-            gnum = int(_group_num) if pd.notna(_group_num) else 0
-            gsize = int(_group_size) if pd.notna(_group_size) else 0
-            av = _group['assay'].iloc[0]
-            assay = None
-            if pd.notna(av):
-                try:
-                    assay = int(float(av))  # handles "1.0" → 1 and "1" → 1
-                except (ValueError, TypeError):
-                    assay = str(av)
-            notes_list = _group['note'].dropna().unique()
-            notes = f"Group {gnum}, Size {gsize}"
-            if len(notes_list) > 0:
-                notes += f" - {'; '.join(notes_list)}"
-            name = f"{_date} - Field {field}, {config}, {gsize} sheep"
-            # tuple indices: 0=name, 1=date, 2=field, 3=config, 4=start_time, 5=duration_min,
-            #                6=devices, 7=assay, 8=notes, 9=group_num, 10=group_size
-            trials.append((name, str(_date), field, config, str(_start_time), 35, devs, assay, notes, gnum, gsize))
-            num += 1
-        return mappings, trials
-
-    DEVICE_TO_SHEEP, TRIALS = _build(_all_data)
+def _():
+    """Load trial metadata."""
+    from gps_analysis import build_trials
+    TRIALS = build_trials()
     print(f"Loaded {len(TRIALS)} trials")
-    return (DEVICE_TO_SHEEP, TRIALS)
+    return (TRIALS,)
 
 
 @app.cell(hide_code=True)
-def _(Path, np, pd):
-    """Build arena coordinate transforms from fitted reward site corners."""
-    _R = 6_371_000.0
-    _csv_path = str(Path(__file__).parent.parent / "data" / "fitted_reward_sites.csv")
-    reward_sites_df = pd.read_csv(_csv_path)
-
-    def _latlon_to_meters(lats, lons, lat0, lon0):
-        lat0_r = np.radians(lat0)
-        x = (lons - lon0) * np.cos(lat0_r) * (np.pi / 180) * _R
-        y = (lats - lat0) * (np.pi / 180) * _R
-        return x, y
-
-    def latlon_to_grid(lats, lons, transform):
-        """Project lat/lon arrays to arena grid coordinates (0–5 range)."""
-        lat0, lon0, M = transform['lat0'], transform['lon0'], transform['M']
-        x, y = _latlon_to_meters(lats, lons, lat0, lon0)
-        pts = np.column_stack([x, y, np.ones(len(x))])
-        res = pts @ M
-        return res[:, 0], res[:, 1]
-
-    def apply_orientation(gx, gy, rotation_deg, reflection):
-        """Rotate and/or reflect grid coordinates around arena center (2.5, 2.5).
-
-        reflection: "mirror x" flips left-right (gx = -gx, i.e. reflects across
-                    the vertical axis); "mirror y" flips up-down (gy = -gy,
-                    reflects across the horizontal axis).
-        Reflection is applied before rotation.
-        """
-        cx, cy = 2.5, 2.5
-        gx = np.asarray(gx, dtype=float) - cx
-        gy = np.asarray(gy, dtype=float) - cy
-        if reflection == "mirror x":
-            gx = -gx
-        elif reflection == "mirror y":
-            gy = -gy
-        if rotation_deg != 0:
-            theta = np.radians(float(rotation_deg))
-            c, s = np.cos(theta), np.sin(theta)
-            gx, gy = c * gx - s * gy, s * gx + c * gy
-        return gx + cx, gy + cy
-
-    # Fit per-field affine transforms from E1–E4 corner control points
-    ARENA_TRANSFORMS = {}
-    for _field in ['A', 'B']:
-        _fdf = reward_sites_df[reward_sites_df['field'] == _field]
-        _corners = _fdf[_fdf['label'].str.startswith('E')]
-        _lat0 = _corners['latitude'].mean()
-        _lon0 = _corners['longitude'].mean()
-        _xm, _ym = _latlon_to_meters(
-            _corners['latitude'].values, _corners['longitude'].values, _lat0, _lon0
-        )
-        _A = np.column_stack([_xm, _ym, np.ones(len(_xm))])
-        _dst = _corners[['grid_x', 'grid_y']].values.astype(float)
-        _M, _, _, _ = np.linalg.lstsq(_A, _dst, rcond=None)
-        ARENA_TRANSFORMS[_field] = {'lat0': _lat0, 'lon0': _lon0, 'M': _M}
-        print(f"Field {_field}: arena center ({_lat0:.6f}°N, {_lon0:.6f}°E)")
-
+def _(pd):
+    """Build arena coordinate transforms from fitted reward sites."""
+    from gps_analysis import latlon_to_grid, apply_orientation, build_arena_transforms, DATA_DIR
+    reward_sites_df = pd.read_csv(DATA_DIR / "fitted_reward_sites.csv")
+    ARENA_TRANSFORMS = build_arena_transforms(reward_sites_df)
     return (reward_sites_df, ARENA_TRANSFORMS, latlon_to_grid, apply_orientation)
 
 
 @app.cell(hide_code=True)
-def _(TRIALS, Path, detect_format_and_load):
+def _(TRIALS, detect_format_and_load):
     """Pre-load all GNSS directories once at startup (does NOT depend on selected_indices)."""
     from concurrent.futures import ThreadPoolExecutor as _TPE
-    _base = Path(__file__).parent.parent / "data" / "gnss"
+    from gps_analysis import DATA_DIR
+    from pathlib import Path
+    _base = DATA_DIR / "gnss"
     _all_dirs = sorted(set(
-        str(_base / f"{int(t[1].split('-')[2])}-02-26")
+        str(_base / f"{int(t['date'].split('-')[2])}-02-26")
         for t in TRIALS
     ))
     _existing = [d for d in _all_dirs if Path(d).exists()]
@@ -285,9 +190,8 @@ def _(TRIALS, mo, mode_widget):
     """Single-trial mode controls: trial selector and per-sheep toggle."""
     _options = {}
     for _i, _trial in enumerate(TRIALS):
-        _name, _date, _field, _config, _start, _dur, _devs, _assay, _notes, _gnum, _gsize = _trial
-        _assay_str = f" [Assay {_assay}]" if _assay is not None else ""
-        _label = f"[{_i:2d}] {_notes.split(' - ')[0]:20s} {_name}{_assay_str}"
+        _assay_str = f" [Assay {_trial['assay']}]" if _trial['assay'] is not None else ""
+        _label = f"[{_i:2d}] {_trial['notes'].split(' - ')[0]:20s} {_trial['name']}{_assay_str}"
         _options[_label] = _i
 
     trial_selector = mo.ui.multiselect(options=_options, label="Select trials", full_width=True)
@@ -305,12 +209,12 @@ def _(TRIALS, mo, mode_widget):
 def _(TRIALS, mo, mode_widget):
     """Aggregated mode controls: filters and aggregate-by selector."""
     TEST_CONFIGS = sorted({"A", "B", "C", "D"})
-    CTRL_CONFIGS = sorted(c for c in set(t[3] for t in TRIALS) if c not in {"A", "B", "C", "D"})
-    _all_configs = sorted(set(t[3] for t in TRIALS))
+    CTRL_CONFIGS = sorted(c for c in set(t["config"] for t in TRIALS) if c not in {"A", "B", "C", "D"})
+    _all_configs = sorted(set(t["config"] for t in TRIALS))
 
-    _fields = ["Both"] + sorted(set(t[2] for t in TRIALS))
-    _gsizes = [str(g) for g in sorted(set(t[10] for t in TRIALS))]
-    _assays = sorted(set(str(t[7]) for t in TRIALS if t[7] is not None))
+    _fields = ["Both"] + sorted(set(t["field"] for t in TRIALS))
+    _gsizes = [str(g) for g in sorted(set(t["group_size"] for t in TRIALS))]
+    _assays = sorted(set(str(t["assay"]) for t in TRIALS if t["assay"] is not None))
 
     field_filter = mo.ui.dropdown(options=_fields, value="Both", label="Field")
     config_preset = mo.ui.radio(
@@ -380,7 +284,8 @@ def _(
     else:
         selected_indices = []
         for _i, _trial in enumerate(TRIALS):
-            _, _date, _field, _config, _, _, _, _assay, _, _, _gsize = _trial
+            _date, _field, _config = _trial["date"], _trial["field"], _trial["config"]
+            _assay, _gsize = _trial["assay"], _trial["group_size"]
             if field_filter.value != "Both" and _field != field_filter.value:
                 continue
             if _active_configs is not None and _config not in _active_configs:
@@ -400,11 +305,11 @@ def _(
 
 @app.cell(hide_code=True)
 def _(
-    TRIALS, DEVICE_TO_SHEEP, ARENA_TRANSFORMS,
+    TRIALS, ARENA_TRANSFORMS,
     GPS_CACHE,
     selected_indices,
     transform_mode_widget,
-    Path, np, pd,
+    np, pd,
     find_matching_devices, latlon_to_grid, apply_orientation,
 ):
     """Project GPS data to arena grid coords and apply orientation transforms.
@@ -413,17 +318,11 @@ def _(
     Auto-detects the correct field transform if the CSV label is wrong.
     Averages gx/gy for sheep carrying 2 GPS devices.
     """
-    _CONFIG_TRANSFORMS = {
-        "A": (0,   "none"),
-        "B": (90,  "none"),
-        "C": (0,   "mirror y"),
-        "D": (270, "mirror x"),
-        "CTRL_FAR": (0, "mirror y"),
-    }
+    from gps_analysis import CONFIG_TRANSFORMS, DATA_DIR
 
     def _get_orientation(config):
         if transform_mode_widget.value == "Per configuration":
-            return _CONFIG_TRANSFORMS.get(config, (0, "none"))
+            return CONFIG_TRANSFORMS.get(config, (0, "none"))
         return (0, "none")
 
     def _in_arena_count(lats, lons, field_key):
@@ -448,9 +347,13 @@ def _(
     _n_no_data = 0
 
     for _tidx in selected_indices:
-        _name, _date, _csv_field, _config, _start_str, _dur_min, _devs, _assay, _notes, _gnum, _gsize = TRIALS[_tidx]
+        _t = TRIALS[_tidx]
+        _name, _date, _csv_field = _t["name"], _t["date"], _t["field"]
+        _config, _start_str, _dur_min = _t["config"], _t["start_time"], _t["duration_min"]
+        _devs, _assay, _notes = _t["devices"], _t["assay"], _t["notes"]
+        _gnum, _gsize = _t["group_num"], _t["group_size"]
         _day = int(_date.split("-")[2])
-        _path_key = str(Path(__file__).parent.parent / "data" / "gnss" / f"{_day}-02-26")
+        _path_key = str(DATA_DIR / "gnss" / f"{_day}-02-26")
         _raw = GPS_CACHE.get(_path_key, {})
         if not _raw:
             _n_no_data += 1
@@ -461,7 +364,7 @@ def _(
         _end_unix = _start_unix + _dur_min * 60
 
         _devices = find_matching_devices(_devs, list(_raw.keys()))
-        _d2s = DEVICE_TO_SHEEP.get(_tidx, {})
+        _d2s = _t["device_to_sheep"]
 
         # Auto-detect correct field using the first device with time-filtered data
         _field = _csv_field

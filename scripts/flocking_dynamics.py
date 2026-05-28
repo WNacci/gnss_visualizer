@@ -19,30 +19,25 @@ app = marimo.App(width="full")
 
 @app.cell(hide_code=True)
 def _():
-    import sys
-    from pathlib import Path
-    sys.path.insert(0, str(Path(__file__).parent))
-
     import numpy as np
     import pandas as pd
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     import marimo as mo
-    from analysis_utils import (
-        build_trials, build_gps_cache, build_arena_transforms,
+    from gps_analysis import (
+        build_trials, build_tracks_cache,
         load_trial_tracks,
     )
 
     TRIALS = build_trials()
-    ARENA_TRANSFORMS = build_arena_transforms()
-    print(f"Loaded {len(TRIALS)} trials — building GPS cache (runs once)…")
-    GPS_CACHE = build_gps_cache(TRIALS)
+    print(f"Loaded {len(TRIALS)} trials — building tracks cache (runs once)…")
+    TRACKS_CACHE = build_tracks_cache()
     return (
         np, pd, plt, mo,
-        build_trials, build_gps_cache, build_arena_transforms,
+        build_trials, build_tracks_cache,
         load_trial_tracks,
-        TRIALS, ARENA_TRANSFORMS, GPS_CACHE,
+        TRIALS, TRACKS_CACHE,
     )
 
 
@@ -51,16 +46,15 @@ def _():
 # ---------------------------------------------------------------------------
 
 @app.cell(hide_code=True)
-def _(TRIALS, np, load_trial_tracks, GPS_CACHE, ARENA_TRANSFORMS):
+def _(TRIALS, np, load_trial_tracks, TRACKS_CACHE):
     """Compute per-trial flocking metrics for all multi-sheep trials."""
 
-    def _compute_cohesion(trial):
+    def _compute_cohesion(trial, apply_orient=False):
         """Return dict of cohesion metrics for one trial, or None if not enough data."""
         tracks = load_trial_tracks(
             trial,
-            gnss_cache=GPS_CACHE,
-            apply_orient=False,
-            arena_transforms=ARENA_TRANSFORMS,
+            tracks_cache=TRACKS_CACHE,
+            apply_orient=apply_orient,
         )
         if len(tracks) < 2:
             return None
@@ -106,11 +100,15 @@ def _(TRIALS, np, load_trial_tracks, GPS_CACHE, ARENA_TRANSFORMS):
             "mean_spread_scalar": float(spread.mean() * 10),
         }
 
-    # Pre-compute cohesion for all multi-sheep trials
+    # Pre-compute cohesion for all multi-sheep trials.
+    # Test configs (A/B/C/D) use apply_orient=True so trajectories are
+    # rotated/reflected into a canonical frame for correct aggregation.
+    _TEST_CONFIGS = {'A', 'B', 'C', 'D'}
     COHESION = {}
     for _tidx, _trial in enumerate(TRIALS):
         if _trial["group_size"] >= 2:
-            _result = _compute_cohesion(_trial)
+            _orient = _trial.get("config") in _TEST_CONFIGS
+            _result = _compute_cohesion(_trial, apply_orient=_orient)
             if _result is not None:
                 COHESION[_tidx] = _result
 

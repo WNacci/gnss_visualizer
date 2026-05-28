@@ -15,32 +15,26 @@ app = marimo.App(width="full")
 
 @app.cell(hide_code=True)
 def _():
-    import sys
-    from pathlib import Path
-    sys.path.insert(0, str(Path(__file__).parent))
-
     import numpy as np
     import pandas as pd
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     import marimo as mo
-    from analysis_utils import (
-        build_trials, build_gps_cache, load_gnss_date, build_arena_transforms,
+    from gps_analysis import (
+        build_trials, build_tracks_cache,
         load_trial_tracks, detect_site_visits, cumulative_path_length,
         DATA_DIR,
     )
 
     TRIALS = build_trials()
-    ARENA_TRANSFORMS = build_arena_transforms()
-
-    print(f"Loaded {len(TRIALS)} trials — building GPS cache (runs once)…")
-    GPS_CACHE = build_gps_cache(TRIALS)
+    print(f"Loaded {len(TRIALS)} trials — building tracks cache (runs once)…")
+    TRACKS_CACHE = build_tracks_cache()
     return (
         np, pd, plt, mo, matplotlib,
-        build_trials, load_gnss_date, build_arena_transforms,
+        build_trials, build_tracks_cache,
         load_trial_tracks, detect_site_visits, cumulative_path_length,
-        DATA_DIR, TRIALS, ARENA_TRANSFORMS,
+        DATA_DIR, TRIALS, TRACKS_CACHE,
     )
 
 
@@ -57,10 +51,6 @@ def _(TRIALS, mo):
         start=0.1, stop=2.0, step=0.1, value=0.5,
         label="Visit detection radius (grid units)",
     )
-    dwell_slider = mo.ui.slider(
-        start=1, stop=60, step=1, value=5,
-        label="Min dwell time (s)",
-    )
     n_sites_to_find = mo.ui.slider(
         start=1, stop=12, step=1, value=3,
         label="# sites needed to end trial",
@@ -74,18 +64,18 @@ def _(TRIALS, mo):
     (across all sheep in the group).
 
     {trial_selector}
-    {mo.hstack([radius_slider, dwell_slider, n_sites_to_find])}
+    {mo.hstack([radius_slider, n_sites_to_find])}
     """)
-    return trial_selector, radius_slider, dwell_slider, n_sites_to_find
+    return trial_selector, radius_slider, n_sites_to_find
 
 
 @app.cell(hide_code=True)
 def _(
     trial_selector, TRIALS, mo,
-    GPS_CACHE, load_trial_tracks, detect_site_visits,
-    cumulative_path_length, ARENA_TRANSFORMS, DATA_DIR,
+    TRACKS_CACHE, load_trial_tracks, detect_site_visits,
+    cumulative_path_length, DATA_DIR,
     np, pd, plt,
-    radius_slider, dwell_slider, n_sites_to_find,
+    radius_slider, n_sites_to_find,
 ):
     if trial_selector.value is None:
         mo.stop(True, mo.md("*Select a trial above.*"))
@@ -93,12 +83,11 @@ def _(
     _tidx = trial_selector.value
     _trial = TRIALS[_tidx]
     _radius = radius_slider.value
-    _min_dwell = dwell_slider.value
     _n_needed = n_sites_to_find.value
 
     _tracks = load_trial_tracks(
-        _trial, gnss_cache=GPS_CACHE,
-        apply_orient=False, arena_transforms=ARENA_TRANSFORMS,
+        _trial, tracks_cache=TRACKS_CACHE,
+        apply_orient=False,
     )
     if not _tracks:
         mo.stop(True, mo.md("*No GPS data found for this trial.*"))
@@ -106,7 +95,7 @@ def _(
     _rdf = pd.read_csv(DATA_DIR / "fitted_reward_sites.csv")
     _visits = detect_site_visits(
         _tracks, _trial['field'],
-        radius=_radius, min_dwell_s=float(_min_dwell),
+        radius=_radius,
         reward_sites_df=_rdf,
     )
 
@@ -217,8 +206,8 @@ def _(
 @app.cell(hide_code=True)
 def _(
     TRIALS, mo,
-    GPS_CACHE, load_trial_tracks, detect_site_visits,
-    cumulative_path_length, ARENA_TRANSFORMS, DATA_DIR,
+    TRACKS_CACHE, load_trial_tracks, detect_site_visits,
+    cumulative_path_length, DATA_DIR,
     np, pd, plt,
 ):
     """Aggregate path length statistics across all trials.
@@ -232,8 +221,8 @@ def _(
 @app.cell(hide_code=True)
 def _(
     TRIALS, mo,
-    GPS_CACHE, load_trial_tracks, detect_site_visits,
-    cumulative_path_length, ARENA_TRANSFORMS, DATA_DIR,
+    TRACKS_CACHE, load_trial_tracks, detect_site_visits,
+    cumulative_path_length, DATA_DIR,
     np, pd, plt,
 ):
     """Aggregate path length across test-configuration trials."""
@@ -244,14 +233,14 @@ def _(
         if _trial['config'] not in _TEST_CONFIGS:
             continue
         _tracks = load_trial_tracks(
-            _trial, gnss_cache=GPS_CACHE,
-            apply_orient=False, arena_transforms=ARENA_TRANSFORMS,
+            _trial, tracks_cache=TRACKS_CACHE,
+            apply_orient=True,
         )
         if not _tracks:
             continue
         _rdf = pd.read_csv(DATA_DIR / "fitted_reward_sites.csv")
         _visits = detect_site_visits(
-            _tracks, _trial['field'], radius=0.5, min_dwell_s=5.0,
+            _tracks, _trial['field'], radius=0.5,
             reward_sites_df=_rdf,
         )
         _first_visits = {}
@@ -310,7 +299,7 @@ def _(
     _ax2.set_ylabel("Mean path length (m)")
     _ax2.set_title("Path length to find 3rd site")
 
-    _fig2.suptitle("Path length / completion time across all test trials  (radius=0.5, dwell≥5 s)")
+    _fig2.suptitle("Path length / completion time across all test trials  (radius=0.5)")
     _fig2.tight_layout()
 
     mo.vstack([
