@@ -1,0 +1,427 @@
+\documentclass[aspectratio=169, 10pt]{beamer}
+
+\usetheme{default}
+\usecolortheme{default}
+\setbeamertemplate{navigation symbols}{}
+\setbeamertemplate{frametitle}{%
+  \vspace{0.5em}%
+  {\usebeamerfont{frametitle}\usebeamercolor[fg]{frametitle}\insertframetitle}%
+  \vspace{0.35em}%
+  \textcolor{black!15}{\hrule height 0.4pt}%
+  \vspace{0.15em}%
+}
+\setbeamertemplate{footline}{%
+  \hfill\textcolor{black!30}{\scriptsize\insertframenumber/\inserttotalframenumber\kern1em}%
+  \vspace{0.3em}%
+}
+\setbeamercolor{frametitle}{fg=black!85}
+\setbeamercolor{title}{fg=black!85}
+\setbeamerfont{frametitle}{series=\bfseries, size=\normalsize}
+\setbeamerfont{title}{series=\bfseries, size=\Large}
+\setbeamercolor{structure}{fg=black!70}
+\setbeamercolor{itemize item}{fg=black!50}
+\setbeamertemplate{itemize item}{\textbullet}
+\setbeamertemplate{itemize subitem}{--}
+
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{xcolor}
+
+\graphicspath{{figures/}}
+
+\begin{document}
+
+% ===========================================================================
+\begin{frame}[plain]
+\vspace{2.5em}
+\begin{center}
+{\LARGE\bfseries Collective Foraging Behaviour\\[0.3em] in Domestic Sheep}\\[1em]
+{\normalsize\color{black!60} GPS-tracked learning, leadership, and group dynamics}\\[2em]
+{\small\color{black!40} April 2026}
+\end{center}
+\end{frame}
+
+\begin{frame}{Outline}
+\tableofcontents
+\end{frame}
+
+% ===========================================================================
+\section{Study Design}
+
+\begin{frame}{Study overview}
+\begin{columns}[T]
+\begin{column}{0.54\textwidth}
+\textbf{Question.} Do groups of sheep learn to locate baited reward
+sites, and how does collective search efficiency change with experience?
+
+\vspace{0.3em}
+\begin{itemize}\setlength\itemsep{0.12em}
+    \item 96 Phase~2 test trials (12 groups, 9 days)
+    \item Assay 0 (unbaited) $\rightarrow$ assay 7 (experienced)
+    \item Groups of 1--8 sheep, 35-min trials, first 25\,min analysed
+    \item 10\,Hz dual-device GNSS; Kalman + RTS smoothed
+    \item 50\,m $\times$ 50\,m arena: 12 sites, \textbf{3 baited} (A1--A3)
+\end{itemize}
+
+\vspace{0.2em}
+\footnotesize
+\textbf{Success:} any individual sheep reaches all 3 baited sites
+($\leq$\,2\,m proximity).
+\textbf{Exploration metrics:} 5\,m proximity radius.
+\end{column}
+\begin{column}{0.43\textwidth}
+\centering
+\includegraphics[width=0.95\textwidth]{arena_layout.png}
+\end{column}
+\end{columns}
+\end{frame}
+
+\begin{frame}{What does success look like?}
+\centering
+\includegraphics[width=0.92\textwidth]{success_failure_example.png}
+
+\vspace{0.05em}
+\small
+\begin{itemize}\setlength\itemsep{0.05em}
+    \item \textbf{Left:} successful trial --- all 3 baited sites reached (green circles, stars).
+          Trajectory cut at completion time.
+    \item \textbf{Right:} failed trial --- diffuse search, $\leq$1 baited site reached.
+          Dashed red circles = 2\,m detection zone.
+\end{itemize}
+\end{frame}
+
+\begin{frame}{Data pipeline}
+\begin{columns}[T]
+\begin{column}{0.5\textwidth}
+\textbf{Processing.}
+\begin{enumerate}\setlength\itemsep{0.08em}
+    \item Raw GNSS $\rightarrow$ lat/lon/time
+    \item Affine projection to arena grid (10\,m/unit)
+    \item Per-config orientation normalisation
+    \item Kalman + RTS smoothing
+    \item Interpolation to 1\,s common grid
+\end{enumerate}
+
+\vspace{0.25em}
+\textbf{Statistics.} KW $H$-tests across assays; MWU pairwise;
+Spearman $\rho$ for trends. Medians and IQR reported.
+Uncorrected for multiple comparisons (exploratory).
+
+\vspace{0.25em}
+\textbf{Config validation.} KW n.s.\ across A--D for both
+completion time and path length.
+\end{column}
+\begin{column}{0.47\textwidth}
+\centering
+\includegraphics[width=\textwidth]{example_trajectory.png}
+
+\vspace{0.3em}
+\includegraphics[width=0.85\textwidth]{config_comparison.png}
+\end{column}
+\end{columns}
+\end{frame}
+
+% ===========================================================================
+\section{Learning to Find Reward Sites}
+
+\begin{frame}{Trajectory evolution: na\"ive to experienced}
+\centering
+\includegraphics[height=0.72\textheight]{trajectory_comparison.png}
+
+\vspace{0.05em}
+\small
+\begin{itemize}\setlength\itemsep{0.05em}
+    \item Assays 0, 2, 4, 7. Na\"ive groups explore diffusely;
+          experienced groups travel directly between baited sites (gold).
+\end{itemize}
+\end{frame}
+
+\begin{frame}{Learning curve: success rate and completion time}
+\centering
+\includegraphics[width=0.75\textwidth]{learning_curve.png}
+
+\vspace{0.05em}
+\small
+\begin{itemize}\setlength\itemsep{0.02em}
+    \item Assay~0 excluded (no baited sites). Success rate rises rapidly.
+    \item Exponential decay fit: $R^2 = 0.98$, $b = -1.01$; plateau $\sim$2\,min.
+\end{itemize}
+\end{frame}
+
+\begin{frame}{Completion time and path length}
+\centering
+\includegraphics[width=0.88\textwidth]{path_completion_by_assay.png}
+
+\vspace{0.05em}
+\small
+\begin{itemize}\setlength\itemsep{0.05em}
+    \item Median completion: 21.9\,min (assay~1) $\rightarrow$ 2.7\,min (assay~6): 8-fold reduction.
+    \item Path falls 329\,m $\rightarrow$ 91\,m (3.6$\times$) --- directed search, not just faster movement.
+\end{itemize}
+\end{frame}
+
+\begin{frame}{Path straightness increases with experience}
+\begin{columns}[T]
+\begin{column}{0.45\textwidth}
+\centering
+\includegraphics[width=0.98\textwidth]{straightness_index.png}
+\end{column}
+\begin{column}{0.50\textwidth}
+\vspace{0.8em}
+\begin{itemize}\setlength\itemsep{0.12em}
+    \item Straightness = beeline / path to first baited site.
+    \item 1.0 = direct; near 0 = tortuous.
+    \item Increasing straightness = route learning.
+\end{itemize}
+\end{column}
+\end{columns}
+\end{frame}
+
+\begin{frame}{The first 5 minutes reveal retained knowledge}
+\centering
+\includegraphics[width=0.95\textwidth]{early_trial_metrics.png}
+
+\vspace{0.05em}
+\small
+\begin{itemize}\setlength\itemsep{0.05em}
+    \item By assay~3+, groups find 1--3 baited sites within 5~min (na\"ive: $<$\,1).
+    \item First-visit latency drops with experience.
+\end{itemize}
+\end{frame}
+
+\begin{frame}{Search occupancy: where do groups look?}
+\centering
+\includegraphics[width=0.95\textwidth]{occupancy_moving_only.png}
+
+\vspace{0.05em}
+\small
+\begin{itemize}\setlength\itemsep{0.05em}
+    \item Occupancy during \textbf{movement only} ($>$\,0.5\,m/min), first 5\,min.
+          Stationary/feeding periods excluded.
+    \item Experienced groups concentrate search near baited sites (gold).
+\end{itemize}
+\end{frame}
+
+\begin{frame}{Total sites explored with experience}
+\begin{columns}[T]
+\begin{column}{0.46\textwidth}
+\centering
+\includegraphics[width=\textwidth]{sites_found_by_assay.png}
+\end{column}
+\begin{column}{0.50\textwidth}
+\vspace{0.8em}
+\begin{itemize}\setlength\itemsep{0.15em}
+    \item Sites explored (5\,m): na\"ive groups visit 7;
+          experienced groups visit 10 of 12.
+    \item Experienced groups find the 3 baited sites
+          \emph{and} explore most of the arena.
+\end{itemize}
+\end{column}
+\end{columns}
+\end{frame}
+
+% ===========================================================================
+\section{Group Dynamics and Leadership}
+
+\begin{frame}{How is leadership measured?}
+\centering
+\includegraphics[width=0.42\textwidth]{leadership_schematic.png}
+
+\vspace{0.05em}
+\small
+\begin{itemize}\setlength\itemsep{0.05em}
+    \item Each sheep is projected onto the group velocity vector.
+          The sheep farthest ahead = ``leader'' at that timestep.
+    \item Only computed when centroid speed $>$\,0.5\,m/min ($\sim$10\% of trial).
+    \item Top sheep's percentage share of leading time: 25\% = fair share (4 sheep).
+\end{itemize}
+\end{frame}
+
+\begin{frame}{Frontal leadership concentration}
+\centering
+\includegraphics[width=0.65\textwidth]{leadership_by_assay.png}
+
+\vspace{0.05em}
+\small
+\begin{itemize}\setlength\itemsep{0.05em}
+    \item Top frontal leader holds $\sim$40--50\% of leading time (fair share = 25\%).
+    \item Moderate over-representation ($\sim$2$\times$), stable across assays.
+\end{itemize}
+\end{frame}
+
+\begin{frame}{Leadership varies between groups}
+\centering
+\includegraphics[width=0.92\textwidth]{group_leadership_profiles.png}
+
+\vspace{0.05em}
+\small
+\begin{itemize}\setlength\itemsep{0.05em}
+    \item Most groups are egalitarian (green). \textbf{Group~13}: sheep 83429
+          dominates ($>$80\% frontal time, 6/8 assays). Group~13 never completes.
+    \item Group-level leadership concentration vs success rate: $\rho = 0.23$, n.s.
+\end{itemize}
+\end{frame}
+
+\begin{frame}{Site recruitment: who attracts followers?}
+\centering
+\includegraphics[width=0.65\textwidth]{recruitment_by_assay.png}
+
+\vspace{0.05em}
+\small
+\begin{itemize}\setlength\itemsep{0.05em}
+    \item \textbf{Recruitment:} when a sheep enters a site and others follow within 1\,min,
+          it is the ``recruiter''. Metric = top recruiter's share of all followers.
+    \item Top recruiter holds $\sim$50--55\% of followers (fair share = 25\%):
+          roughly $2\times$ over-representation.
+    \item Recruitment concentration is comparable to frontal leadership ---
+          both show moderate inequality, no single dictator.
+\end{itemize}
+\end{frame}
+
+\begin{frame}{Group cohesion: NND and spread}
+\begin{columns}[T]
+\begin{column}{0.46\textwidth}
+\centering
+\includegraphics[width=\textwidth]{pioneer_visits_by_assay.png}
+\end{column}
+\begin{column}{0.50\textwidth}
+\vspace{0.8em}
+\begin{itemize}\setlength\itemsep{0.12em}
+    \item \textbf{Pioneer count} distributed; no dedicated scout.
+    \item \textbf{NND} stable at 0.9--1.5\,m.
+    \item Groups do not fragment to search independently.
+\end{itemize}
+\end{column}
+\end{columns}
+\end{frame}
+
+\begin{frame}{Cohesion dynamics over trial duration}
+\centering
+\includegraphics[width=0.75\textwidth]{flocking_timeseries.png}
+\small
+\begin{itemize}\setlength\itemsep{0em}
+    \item NND and spread ($\pm$\,SEM) over 25\,min. Stable within trials --- learning changes navigation, not structure.
+\end{itemize}
+\end{frame}
+
+% ===========================================================================
+\section{Foraging Decisions}
+
+\begin{frame}{Site residence time: baited vs unbaited}
+\centering
+\includegraphics[width=0.82\textwidth]{residence_time.png}
+
+\vspace{0.05em}
+\small
+\begin{itemize}\setlength\itemsep{0.05em}
+    \item 5\,m proximity radius. Baited: median 53\,s; unbaited: 17\,s (3$\times$).
+    \item Giving-up time at unbaited sites by assay tests MVT predictions.
+\end{itemize}
+\end{frame}
+
+\begin{frame}{Speed and spread change at site discovery}
+\centering
+\includegraphics[width=0.82\textwidth]{discovery_effects.png}
+
+\vspace{0.05em}
+\small
+\begin{itemize}\setlength\itemsep{0.05em}
+    \item 60\,s windows before/after first visit. Baited: speed drops (exploitation).
+    \item Unbaited: minimal change. MWU and median $\Delta$ on plot.
+\end{itemize}
+\end{frame}
+
+\begin{frame}{Spatial entropy, revisit rate, and coverage}
+\centering
+\includegraphics[width=0.95\textwidth]{spatial_info_by_assay.png}
+
+\vspace{0.05em}
+\small
+\begin{itemize}\setlength\itemsep{0.05em}
+    \item Entropy stable; revisit rate increases (targeted returns to known sites).
+    \item Coverage rises 27\% $\rightarrow$ 35\%.
+\end{itemize}
+\end{frame}
+
+% ===========================================================================
+\section{Summary}
+
+\begin{frame}{What this data shows}
+\begin{columns}[T]
+\begin{column}{0.55\textwidth}
+\textbf{Groups of sheep learn to find baited reward sites rapidly.}
+By the third exposure, most groups locate all 3 baited sites within
+5 minutes. The improvement is driven by directed search (shorter,
+straighter paths), not simply faster movement.
+
+\vspace{0.5em}
+\textbf{Search is collective but not fully egalitarian.}
+Groups maintain tight cohesion (NND $\sim$1\,m) throughout learning.
+The top frontal leader holds $\sim$40--47\% of leading time
+(fair share = 25\%), and the top recruiter holds $\sim$50--55\% of
+followers, suggesting some individuals disproportionately initiate
+group visits.
+
+\vspace{0.5em}
+\textbf{Sheep discriminate between sites.}
+Residence time at baited sites is 3$\times$ longer than at unbaited
+sites. Groups slow down at baited sites, consistent with a
+search-to-exploitation transition.
+\end{column}
+\begin{column}{0.42\textwidth}
+\centering
+\footnotesize
+\begin{tabular}{l c c c}
+\toprule
+\textbf{Assay} & \textbf{Compl.} & \textbf{Path} & \textbf{Sites} \\
+ & \textbf{(min)} & \textbf{(m)} & \\
+\midrule
+0 & 30.9 & 512 & 7 \\
+1 & 21.9 & 329 & 10 \\
+2 & 7.3  & 120 & 10 \\
+3 & 3.4  & 107 & 10 \\
+4 & 3.5  & 95  & 10 \\
+5 & 2.5  & 77  & 10 \\
+6 & 2.7  & 91  & 10 \\
+7 & 2.3  & 64  & 10 \\
+\bottomrule
+\end{tabular}
+
+\vspace{0.3em}
+\scriptsize Medians, successful trials only.\\
+Completion = all 3 baited sites ($\leq$\,2\,m).\\
+Sites = exploration count (5\,m).
+\end{column}
+\end{columns}
+\end{frame}
+
+\begin{frame}{Caveats and next steps}
+\begin{columns}[T]
+\begin{column}{0.48\textwidth}
+\textbf{Caveats}
+\begin{itemize}\setlength\itemsep{0.12em}
+    \item Same 12 groups across assays (pseudoreplication);
+          mixed-effects models needed.
+    \item Pairwise tests uncorrected for multiple comparisons.
+    \item Group size (1--8) not controlled.
+    \item GPS accuracy $\sim$2\,m; Kalman + RTS smoothing reduces but
+          does not eliminate jitter.
+\end{itemize}
+\end{column}
+\begin{column}{0.48\textwidth}
+\textbf{Next steps}
+\begin{itemize}\setlength\itemsep{0.12em}
+    \item Route fidelity (DTW across trials).
+    \item HMM behavioural state segmentation.
+    \item Time-lagged cross-correlations for
+          leader--follower networks (beyond recruitment metric).
+    \item Dual-device sensor fusion refinement.
+    \item Individual-level analysis: which sheep
+          drive group success?
+\end{itemize}
+\end{column}
+\end{columns}
+\end{frame}
+
+\end{document}
