@@ -625,5 +625,92 @@ def _(
         mo.ui.table(ctrl_events_df),
     ])
     return ctrl_events_df, ctrl_summary_df
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md("---\n## Paired before/after permutation null")
+    return
+
+
+@app.cell(hide_code=True)
+def _(events_df, np, pd, plt, mo):
+    """Per-event coin-flip swap of (before, after) labels; two-sided empirical p."""
+    _N_PERMUTATIONS = 1000
+    _rng_c = np.random.default_rng(seed=42)
+
+    _sb = events_df['speed_before'].to_numpy()
+    _sa = events_df['speed_after'].to_numpy()
+    _pb = events_df['spread_before'].to_numpy()
+    _pa = events_df['spread_after'].to_numpy()
+
+    _obs_speed = float((100 * (_sa - _sb) / np.maximum(_sb, 0.01)).mean())
+    _obs_spread = float((100 * (_pa - _pb) / np.maximum(_pb, 0.01)).mean())
+
+    _n_events = len(_sb)
+    _swap = _rng_c.random((_N_PERMUTATIONS, _n_events)) < 0.5
+    _b_s = np.where(_swap, _sa, _sb)
+    _a_s = np.where(_swap, _sb, _sa)
+    _b_p = np.where(_swap, _pa, _pb)
+    _a_p = np.where(_swap, _pb, _pa)
+    _null_speed = (100 * (_a_s - _b_s) / np.maximum(_b_s, 0.01)).mean(axis=1)
+    _null_spread = (100 * (_a_p - _b_p) / np.maximum(_b_p, 0.01)).mean(axis=1)
+
+    _p_speed = float((np.abs(_null_speed) >= np.abs(_obs_speed)).mean())
+    _p_spread = float((np.abs(_null_spread) >= np.abs(_obs_spread)).mean())
+
+    perm_summary = pd.DataFrame([
+        {
+            'metric': 'speed_pct',
+            'observed_mean': _obs_speed,
+            'null_mean': float(_null_speed.mean()),
+            'null_ci_lo': float(np.percentile(_null_speed, 2.5)),
+            'null_ci_hi': float(np.percentile(_null_speed, 97.5)),
+            'p_two_sided': _p_speed,
+            'n_events': _n_events,
+        },
+        {
+            'metric': 'spread_pct',
+            'observed_mean': _obs_spread,
+            'null_mean': float(_null_spread.mean()),
+            'null_ci_lo': float(np.percentile(_null_spread, 2.5)),
+            'null_ci_hi': float(np.percentile(_null_spread, 97.5)),
+            'p_two_sided': _p_spread,
+            'n_events': _n_events,
+        },
+    ])
+
+    _fig_p, (_ax_ns, _ax_np) = plt.subplots(1, 2, figsize=(13, 4.5))
+    _ax_ns.hist(_null_speed, bins=40, color='#2171b5', alpha=0.7)
+    _ax_ns.axvline(_obs_speed, color='red', lw=2, label=f"observed = {_obs_speed:.2f}%")
+    _ax_ns.set_title(f"Speed null (p = {_p_speed:.3f})")
+    _ax_ns.set_xlabel("% change (null draws)")
+    _ax_ns.set_ylabel("count")
+    _ax_ns.legend()
+    _ax_np.hist(_null_spread, bins=40, color='#d7191c', alpha=0.7)
+    _ax_np.axvline(_obs_spread, color='red', lw=2, label=f"observed = {_obs_spread:.2f}%")
+    _ax_np.set_title(f"Spread null (p = {_p_spread:.3f})")
+    _ax_np.set_xlabel("% change (null draws)")
+    _ax_np.set_ylabel("count")
+    _ax_np.legend()
+    _fig_p.suptitle(
+        f"Paired permutation null — coin-flip swap of (before, after) per event, "
+        f"N={_N_PERMUTATIONS}, n_events={_n_events}",
+        fontsize=11,
+    )
+    _fig_p.tight_layout()
+
+    print(f"[Cell C] obs_speed={_obs_speed:.3f}% p={_p_speed:.3f} | "
+          f"obs_spread={_obs_spread:.3f}% p={_p_spread:.3f} | n={_n_events}")
+    print(perm_summary.to_string(index=False))
+
+    mo.vstack([
+        _fig_p,
+        mo.md("### Paired permutation null"),
+        mo.ui.table(perm_summary),
+    ])
+    return perm_summary
+
+
 if __name__ == "__main__":
     app.run()
