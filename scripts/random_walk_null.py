@@ -211,7 +211,26 @@ def _(np, ARENA_LO, ARENA_HI, COVERAGE_BIN, SITE_GRID, SITE_RADIUS):
                 first_times.append(float(t[idx]))
         first_times.sort()
         return first_times
-    return coverage, revisit_rate, straightness, sites_found_by_time
+
+    def time_at_sites(gx, gy, sites=SITE_GRID, radius=SITE_RADIUS):
+        """Fraction of timesteps within radius of ANY reward site.
+
+        Direct measure of how much time a sheep (or walker) spends near
+        food locations. Real sheep should beat a movement-matched random
+        walker on this metric because they navigate to reward sites.
+        """
+        if len(gx) == 0:
+            return 0.0
+        gx = np.asarray(gx, dtype=float)
+        gy = np.asarray(gy, dtype=float)
+        in_any = np.zeros(len(gx), dtype=bool)
+        for _label, (sx, sy) in sites.items():
+            in_any |= np.hypot(gx - sx, gy - sy) <= radius
+        return float(in_any.mean())
+    return (
+        coverage, revisit_rate, straightness,
+        sites_found_by_time, time_at_sites,
+    )
 
 
 @app.cell(hide_code=True)
@@ -297,9 +316,19 @@ def _(np, ARENA_LO, ARENA_HI, COVERAGE_BIN, SITE_GRID, SITE_RADIUS):
             ft.sort()
         return first_times_per_k
 
+    def time_at_sites_batch(gx, gy, sites=SITE_GRID, radius=SITE_RADIUS):
+        """Per-walk fraction of timesteps within radius of any reward site. Shape (K,)."""
+        K, T = gx.shape
+        if T == 0:
+            return np.zeros(K)
+        in_any = np.zeros((K, T), dtype=bool)
+        for _label, (sx, sy) in sites.items():
+            in_any |= np.hypot(gx - sx, gy - sy) <= radius
+        return in_any.mean(axis=1)
+
     return (
         simulate_walks_batch, coverage_batch, revisit_rate_batch,
-        straightness_batch, sites_found_by_time_batch,
+        straightness_batch, sites_found_by_time_batch, time_at_sites_batch,
     )
 
 
@@ -309,9 +338,9 @@ def _(
     TRIALS, TRACKS_CACHE, load_trial_tracks,
     KEEP_CONFIGS, PHASE2_DATE,
     fit_movement_stats,
-    coverage, revisit_rate, straightness, sites_found_by_time,
+    coverage, revisit_rate, straightness, sites_found_by_time, time_at_sites,
     simulate_walks_batch, coverage_batch, revisit_rate_batch,
-    straightness_batch, sites_found_by_time_batch,
+    straightness_batch, sites_found_by_time_batch, time_at_sites_batch,
     K_slider, phase_dd, time_window_slider,
 ):
     # Decimate 10 Hz tracks to 1 Hz before fitting/simulating. Both real and
@@ -378,6 +407,7 @@ def _(
                 _real_rev = revisit_rate(_gx, _gy)
                 _real_str = straightness(_gx, _gy)
                 _real_sites = sites_found_by_time(_gx, _gy, _t)
+                _real_tas = time_at_sites(_gx, _gy)
                 real_records.append({
                     "assay": _assay,
                     "trial_idx": _tidx,
@@ -386,6 +416,7 @@ def _(
                     "revisit": _real_rev,
                     "straightness": _real_str,
                     "n_sites": len(_real_sites),
+                    "time_at_sites": _real_tas,
                 })
                 _bucket["real"].append(_real_sites)
 
@@ -403,6 +434,7 @@ def _(
                 _sim_sites_list = sites_found_by_time_batch(
                     _sgx_all, _sgy_all, _st,
                 )
+                _sim_tas = time_at_sites_batch(_sgx_all, _sgy_all)
                 for _k in range(K):
                     sim_records.append({
                         "assay": _assay,
@@ -413,6 +445,7 @@ def _(
                         "revisit": float(_sim_revs[_k]),
                         "straightness": float(_sim_strs[_k]),
                         "n_sites": len(_sim_sites_list[_k]),
+                        "time_at_sites": float(_sim_tas[_k]),
                     })
                     _bucket["sim"].append(_sim_sites_list[_k])
 
@@ -603,9 +636,10 @@ def _(np, pd, plt, mo, real_df, sim_df):
         ("coverage", "Coverage (unique cells)"),
         ("revisit", "Revisit rate (samples/cell)"),
         ("straightness", "Straightness (disp/path)"),
+        ("time_at_sites", "Time at reward sites (fraction)"),
     ]
 
-    _fig_d, _axes_d = plt.subplots(1, 3, figsize=(15, 5))
+    _fig_d, _axes_d = plt.subplots(1, 4, figsize=(19, 5))
     _summary_rows = []
     _jitter_rng = np.random.default_rng(42)
 
