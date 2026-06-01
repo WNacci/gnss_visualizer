@@ -1,14 +1,72 @@
 # Sheep GPS analysis — questions, answers, and proofs
 
+## Executive summary
+
+Sheep groups of four were tracked through foraging trials in a 12-site
+arena. Four test configurations (A–D) baited **fixed** triplets of
+three sites — the same positions every trial — allowing spatial memory
+to accumulate. Two control configurations (CTRL_FAR, CTRL_BARN) baited
+**random** site positions each trial, preventing stable spatial
+learning. All results below are from Phase 2 (from 17 Feb 2026).
+
+**Spatial individuality (occupancy).** Individual sheep occupy
+distinct sub-regions within a trial rather than moving
+interchangeably. Mean per-sheep occupancy entropy is significantly
+lower than a sheep-ID shuffle null (p ≈ 0.01 per trial).
+
+**Learning to find sites (path length).** Across assays within a
+group, sheep find more reward sites with experience (p = 0.003 vs.
+within-group assay-label shuffle), with borderline improvement in
+completion time (p = 0.042). Total path length does not decrease
+significantly — sheep navigate to food better without necessarily
+moving less.
+
+**Flocking (group cohesion).** No detectable change in nearest-
+neighbour distance or group spread across assays (Spearman ρ ≈ 0,
+p > 0.6). Group cohesion is roughly constant across the learning
+period.
+
+**Leadership.** Leadership is non-uniform — one sheep tends to occupy
+the frontal position disproportionately within each trial (block-
+permutation null, 2000 permutations). Continuous leadership scores
+show temporal autocorrelation, indicating persistence over seconds
+rather than random fluctuation. Rank stability across assays and
+leader–pioneer overlap are quantified in the notebook.
+
+**Site discovery effects.** Sheep slow down significantly after
+finding a reward site (speed Δ ≈ −2.1 m/min, p ≈ 0), consistent
+with stopping to eat. Group spread changes by only ~3 cm —
+statistically detectable at n ≈ 950 events but biologically
+negligible. Because control sheep also encounter (randomly-placed)
+reward, a non-zero Δ in CTRL would confirm the effect is a general
+reward-consumption reflex rather than recognition of a learned
+location.
+
+**Random-walk null — the key finding.** The clearest test of spatial
+learning uses a *baited preference* metric: the fraction of site-
+visit time at the fixed baited triplet vs. all 12 sites (spatial
+chance = 3/12 = 0.25). After canonical orientation, the baited
+triplet maps to positions {A1, A2, A3} for all test configs. Real
+sheep in test trials score 0.49–0.60, compared to a simulated
+random-walk baseline of ~0.25. Control sheep score ~0.29 ≈ chance:
+because CTRL reward positions change each trial, the canonical
+positions {A1, A2, A3} accumulate no learned value — confirming the
+effect is driven by spatial memory, not by reward presence alone.
+
+---
+
 ## Experimental context
 
 GPS collars track sheep through ~35-minute foraging trials in a flat
 arena containing 12 reward-site positions on a square grid
 (`SITE_GRID` in `gps_analysis.config`). Four test configurations
-(A, B, C, D) each bait a different triplet of three sites; two control
-configurations (CTRL_FAR, CTRL_BARN) provide no real reward. Within
-each group of animals, successive trials are numbered by `assay` —
-this captures learning across days.
+(A, B, C, D) each bait a **fixed** triplet of three sites — the same
+three positions every trial — so sheep can accumulate spatial memory
+across assays. Two control configurations (CTRL_FAR, CTRL_BARN) place
+reward at **random** site positions each trial; because the baited
+triplet changes, no stable spatial memory can develop. Within each
+group of animals, successive trials are numbered by `assay` — this
+captures learning across days.
 
 The dataset is split into two phases. Phase 1 (pre-2026-02-17) is
 protocol-calibration data with variable group sizes. Phase 2 (date ≥
@@ -21,7 +79,10 @@ Per-config orientation transforms in `CONFIG_TRANSFORMS` rotate or
 mirror each test config's tracks so the baited triplet always lands at
 the canonical positions {A1, A2, A3} after `apply_orient=True`. This
 makes "baited" a well-defined set of grid positions in the oriented
-frame without needing per-trial baiting metadata downstream.
+frame without needing per-trial baiting metadata downstream. Control
+configurations have no fixed canonical baited set because their reward
+positions change each trial; they are excluded from baited-preference
+analyses (§6.1) and used as movement baselines elsewhere.
 
 ## AI involvement
 
@@ -256,20 +317,23 @@ empirical p. *Result:* speed Δ = −2.13 m/min (p ≈ 0; sheep slow to
 eat at the site); spread Δ = +0.03 m (statistically significant only
 because n = 952 — effect is 3 cm, biologically negligible).
 
-### 5.2 Does the apparent effect vanish in controls?
+### 5.2 Does the same effect appear in control trials?
 
-**Question.** Do the same speed/spread changes appear at *placebo*
-discovery times in control trials?
+**Question.** Control sheep also encounter reward (at random positions
+each trial). Does the immediate slowing response occur at those
+discoveries too — and if so, what does that tell us?
 
-**Answer.** *H₀:* placebo events in CTRL_FAR / CTRL_BARN trials produce
-the same Δ as real events in test trials. *Reject* if control Δ
-distribution differs systematically.
+**Answer.** *H₀:* the slowing response is a general reward-consumption
+reflex, present regardless of whether reward positions are fixed or
+random. A non-zero Δ in CTRL would confirm this interpretation (sheep
+slow because they eat, not because they recognise a learned location).
+The spatial-learning signal is captured by the *preference* metric
+(§6.1), not by the magnitude of the immediate slowing.
 
-**Proof.** Per control trial, sample K placebo timestamps from the
-empirical distribution of test discovery times (matches the
-time-of-trial profile). Compute the same before/after speed and spread.
-Plot test vs control side-by-side. Currently descriptive — no formal
-inferential comparison.
+**Proof.** Detect discovery events in CTRL trials using the same dwell
+criterion. Compute before/after speed and spread Δ. Plot test vs
+control side-by-side. Currently descriptive — no formal inferential
+comparison between test and CTRL Δ magnitudes.
 
 ---
 
@@ -312,9 +376,14 @@ because it doesn't share the canonical orientation.
 | CTRL | 0.29 ≈ chance | 0.25 | 0.25 |
 
 Sheep in baited configurations spend ~2× chance of their site-time at
-the 3 baited sites. CTRL sits at chance — exactly the predicted null.
-The simulator independently recovers 0.25 across all configs (sanity
-check that the canonical site grid is uniform under a random walker).
+the 3 baited sites. CTRL sits at chance — consistent with no stable
+spatial memory: because CTRL reward positions change each trial, the
+canonical {A1, A2, A3} positions accumulate no learned value for CTRL
+sheep. The simulator independently recovers 0.25 across all configs
+(sanity check that the canonical site grid is uniform under a random
+walker). Note that CTRL sheep do encounter and consume reward — their
+chance-level score on this metric specifically reflects the absence of
+spatial learning for fixed locations, not the absence of reward.
 
 ### 6.2 Do general movement statistics differ from a random walker?
 
@@ -372,10 +441,11 @@ metrics.
 2. **General movement directionality.** The one-sided p in the §6.2
    2×2 panel assumes "real > null"; the substantive picture is the
    two-sided diagnostic table.
-3. **CTRL canonical-frame interpretation.** CTRL_BARN trials don't
-   appear in `CONFIG_TRANSFORMS` (CTRL_FAR does), so they aren't
-   rotated to the canonical frame. The general time-at-any-site metric
-   may be inflated for CTRL because the canonical site positions
-   happen to overlap with where unoriented control sheep naturally
-   sit. The baited-preference test (§6.1) excludes CTRL for this
-   reason.
+3. **CTRL canonical-frame interpretation.** Control configurations
+   have reward at random positions per trial, so there is no fixed
+   baited triplet to orient. CTRL_BARN additionally does not appear
+   in `CONFIG_TRANSFORMS`, so its tracks are not rotated at all.
+   Both factors mean CTRL is correctly excluded from §6.1. For the
+   general movement metrics in §6.2, CTRL tracks are used without
+   canonical orientation; absolute spatial comparisons to test-config
+   tracks should be made with caution.
