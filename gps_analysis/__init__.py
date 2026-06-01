@@ -4,6 +4,8 @@ from gps_analysis.config import (
     CONFIG_TRANSFORMS,
     SITE_GRID,
     SITE_LABELS,
+    BAITED_CANONICAL,
+    UNBAITED_CANONICAL,
     GPS_OFFSET,
     DATA_DIR,
 )
@@ -35,7 +37,8 @@ from gps_analysis.metrics import (
 from gps_analysis._signal import kalman_smooth_track
 
 __all__ = [
-    "CONFIG_TRANSFORMS", "SITE_GRID", "SITE_LABELS", "GPS_OFFSET", "DATA_DIR",
+    "CONFIG_TRANSFORMS", "SITE_GRID", "SITE_LABELS",
+    "BAITED_CANONICAL", "UNBAITED_CANONICAL", "GPS_OFFSET", "DATA_DIR",
     "load_gnss_dir", "load_gnss_dir_full", "load_gnss_date",
     "build_arena_transforms", "latlon_to_grid", "apply_orientation",
     "build_trials",

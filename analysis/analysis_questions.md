@@ -239,11 +239,54 @@ comparison is interpretable visually; no formal inferential test added.
 
 ## 6. Random-walk null model (`scripts/random_walk_null.py`)
 
-### 6.1 Are observed search statistics distinguishable from a movement-matched random walker?
+The analyses below are grouped by *configuration* (A, B, C, D, CTRL) — **not**
+assay number. An earlier version of this script labelled the grouping variable
+`_assay`, which was misleading; it has been renamed to `_config_group`.
+
+### 6.1 Do sheep navigate to baited sites? (baited preference)
+
+**Question.** Do sheep spend a disproportionate share of their site-time at
+the **baited** triplet relative to the **unbaited** 9 sites?
+
+**Answer.** *H₀:* the share of site-time at baited sites,
+`baited_fraction = time_at_baited / (time_at_baited + time_at_unbaited)`,
+is the same in real sheep as in a movement-matched correlated random walk;
+in the canonical (per-config oriented) frame this should sit near the
+spatial chance level `3/12 = 0.25`. *Reject* if real `baited_fraction` is
+systematically above the simulated distribution.
+
+**Proof.** After `apply_orient=True`, each test config's baited triplet
+maps to canonical positions A1, A2, A3 (the convention is enforced by the
+orientation transforms). Per Phase 2 sheep-trial, compute
+`time_at_baited` (fraction of timesteps within radius 0.5 of any of {A1,
+A2, A3}) and `time_at_unbaited` (any of the other 9 sites), then derive
+`baited_fraction`. The same metric is computed on K = 50 simulated walks
+per sheep. Per-config violin (sim) + scatter (real) plus a pooled
+histogram across A/B/C/D. CTRL is excluded from the test population
+because it doesn't share the canonical orientation.
+
+*Phase 2 result:*
+
+| Configuration | Real `b/(b+u)` | Sim `b/(b+u)` | Chance |
+|---|---|---|---|
+| A | **0.53** | 0.25 | 0.25 |
+| B | **0.49** | 0.25 | 0.25 |
+| C | **0.58** | 0.25 | 0.25 |
+| D | **0.60** | 0.25 | 0.25 |
+| CTRL | 0.29 ≈ chance | 0.25 | 0.25 |
+
+Sheep in baited configurations spend ~2× chance of their site-time at the
+3 baited sites. CTRL sheep sit at chance, as expected for a no-reward
+control. The simulator correctly recovers ≈ 0.25 across all configs
+(sanity check that the canonical site grid is uniform under a random
+walker).
+
+### 6.2 Are observed search statistics distinguishable from a movement-matched random walker?
 
 **Question.** Does each sheep behave like a correlated random walker with
 its own empirical step-length and turn-angle distribution, or does it
-carry additional structure (spatial memory, navigation)?
+carry additional structure (spatial memory, navigation) on the general
+movement metrics?
 
 **Answer.** *H₀:* per-sheep observed (coverage, revisit rate, straightness,
 sites-found-by-time, time-at-reward-sites) is statistically
@@ -258,16 +301,13 @@ simulator); compute each metric on real and on all K simulated
 trajectories; per real value, empirical p = fraction of sim ≥ real
 (one-sided per metric). Diagnostic cell also reports median z-score
 `(real − sim_median)/sim_std`, % of real points outside sim 5–95 %, and a
-two-sided empirical p — these reveal the substantive direction without
-committing to a one-sided prediction.
+two-sided empirical p, grouped *by configuration* (A, B, C, D, CTRL).
 
 *Phase 2 result (direction-aware):* sheep cover **less** than null
 (memory / focus), revisit **more** (consistent), move **more straight**
-(clear), and spend ≈ 1.28× (assay A) – 1.30× (assay D) more time at
-reward sites than null. The CTRL ratio of 1.43× is suspicious — control
-trials may not be in the same canonical orientation as A/B/C/D, so the
-canonical site positions may overlap with where control sheep happen to
-be.
+(clear). General time-at-any-site is slightly above null (CTRL ratio
+inflated by canonical-frame caveats). The clean reward-navigation signal
+lives in §6.1 above, not in the general movement metrics.
 
 ---
 

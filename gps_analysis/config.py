@@ -24,6 +24,13 @@ SITE_GRID = {
 }
 SITE_LABELS = sorted(SITE_GRID.keys())
 
+# After `apply_orient=True`, each config's baited triplet is rotated/mirrored
+# onto the canonical Config-A positions, so the baited sites in the oriented
+# frame are always {A1, A2, A3} regardless of the trial's configuration. CTRL
+# trials don't have a meaningful baited set in this frame.
+BAITED_CANONICAL = {"A1", "A2", "A3"}
+UNBAITED_CANONICAL = set(SITE_GRID.keys()) - BAITED_CANONICAL
+
 # Per (field, config) GPS offset correction (metres), derived from sheep
 # cluster centres at known reward sites (experienced trials, assay >= 2).
 # Second-iteration values: original one-shot offsets + measured residuals.

@@ -26,9 +26,11 @@ def _():
     from gps_analysis import (
         build_trials, build_tracks_cache,
         load_trial_tracks, detect_site_visits, cumulative_path_length,
-        SITE_GRID, DATA_DIR,
+        SITE_GRID, BAITED_CANONICAL, UNBAITED_CANONICAL, DATA_DIR,
     )
 
+    BAITED_SITES = {k: SITE_GRID[k] for k in BAITED_CANONICAL}
+    UNBAITED_SITES = {k: SITE_GRID[k] for k in UNBAITED_CANONICAL}
     KEEP_CONFIGS = {"A", "B", "C", "D", "CTRL_FAR", "CTRL_BARN"}
     K_DEFAULT = 50
     ARENA_LO = 0.0
@@ -44,7 +46,7 @@ def _():
     return (
         np, pd, plt, mo, matplotlib,
         load_trial_tracks, detect_site_visits, cumulative_path_length,
-        SITE_GRID, DATA_DIR,
+        SITE_GRID, BAITED_SITES, UNBAITED_SITES, DATA_DIR,
         TRIALS, TRACKS_CACHE,
         KEEP_CONFIGS, K_DEFAULT, ARENA_LO, ARENA_HI, COVERAGE_BIN,
         PHASE2_DATE, SITE_RADIUS,
@@ -213,11 +215,13 @@ def _(np, ARENA_LO, ARENA_HI, COVERAGE_BIN, SITE_GRID, SITE_RADIUS):
         return first_times
 
     def time_at_sites(gx, gy, sites=SITE_GRID, radius=SITE_RADIUS):
-        """Fraction of timesteps within radius of ANY reward site.
+        """Fraction of timesteps within radius of ANY of the passed sites.
 
-        Direct measure of how much time a sheep (or walker) spends near
-        food locations. Real sheep should beat a movement-matched random
-        walker on this metric because they navigate to reward sites.
+        Used in canonical-oriented frame with either BAITED_SITES (3),
+        UNBAITED_SITES (9), or SITE_GRID (all 12). Real sheep should
+        beat a movement-matched random walker on time_at(BAITED) because
+        they navigate to reward locations, but should be near chance on
+        time_at(UNBAITED).
         """
         if len(gx) == 0:
             return 0.0
@@ -317,7 +321,7 @@ def _(np, ARENA_LO, ARENA_HI, COVERAGE_BIN, SITE_GRID, SITE_RADIUS):
         return first_times_per_k
 
     def time_at_sites_batch(gx, gy, sites=SITE_GRID, radius=SITE_RADIUS):
-        """Per-walk fraction of timesteps within radius of any reward site. Shape (K,)."""
+        """Per-walk fraction of timesteps within radius of any of the passed sites. Shape (K,)."""
         K, T = gx.shape
         if T == 0:
             return np.zeros(K)
@@ -337,6 +341,7 @@ def _(
     np, pd, mo,
     TRIALS, TRACKS_CACHE, load_trial_tracks,
     KEEP_CONFIGS, PHASE2_DATE,
+    BAITED_SITES, UNBAITED_SITES,
     fit_movement_stats,
     coverage, revisit_rate, straightness, sites_found_by_time, time_at_sites,
     simulate_walks_batch, coverage_batch, revisit_rate_batch,
@@ -380,8 +385,12 @@ def _(
             if not _tracks:
                 continue
 
-            _assay = "CTRL" if _cfg.startswith("CTRL") else _cfg
-            _bucket = discovery_curves.setdefault(_assay, {"real": [], "sim": []})
+            # NOTE: this groups by *configuration*, not by assay number.
+            # `_config_group` is "A"/"B"/"C"/"D" for test trials or "CTRL" for
+            # control trials. Real assay is `_trial["assay"]` (per-group trial
+            # sequence) and isn't used here.
+            _config_group = "CTRL" if _cfg.startswith("CTRL") else _cfg
+            _bucket = discovery_curves.setdefault(_config_group, {"real": [], "sim": []})
             _n_trials_used += 1
 
             for _sheep_id, _trk in _tracks.items():
@@ -408,8 +417,10 @@ def _(
                 _real_str = straightness(_gx, _gy)
                 _real_sites = sites_found_by_time(_gx, _gy, _t)
                 _real_tas = time_at_sites(_gx, _gy)
+                _real_tab = time_at_sites(_gx, _gy, sites=BAITED_SITES)
+                _real_tau = time_at_sites(_gx, _gy, sites=UNBAITED_SITES)
                 real_records.append({
-                    "assay": _assay,
+                    "config": _config_group,
                     "trial_idx": _tidx,
                     "sheep": _sheep_id,
                     "coverage": _real_cov,
@@ -417,6 +428,8 @@ def _(
                     "straightness": _real_str,
                     "n_sites": len(_real_sites),
                     "time_at_sites": _real_tas,
+                    "time_at_baited": _real_tab,
+                    "time_at_unbaited": _real_tau,
                 })
                 _bucket["real"].append(_real_sites)
 
@@ -435,9 +448,11 @@ def _(
                     _sgx_all, _sgy_all, _st,
                 )
                 _sim_tas = time_at_sites_batch(_sgx_all, _sgy_all)
+                _sim_tab = time_at_sites_batch(_sgx_all, _sgy_all, sites=BAITED_SITES)
+                _sim_tau = time_at_sites_batch(_sgx_all, _sgy_all, sites=UNBAITED_SITES)
                 for _k in range(K):
                     sim_records.append({
-                        "assay": _assay,
+                        "config": _config_group,
                         "trial_idx": _tidx,
                         "sheep": _sheep_id,
                         "k": _k,
@@ -446,6 +461,8 @@ def _(
                         "straightness": float(_sim_strs[_k]),
                         "n_sites": len(_sim_sites_list[_k]),
                         "time_at_sites": float(_sim_tas[_k]),
+                        "time_at_baited": float(_sim_tab[_k]),
+                        "time_at_unbaited": float(_sim_tau[_k]),
                     })
                     _bucket["sim"].append(_sim_sites_list[_k])
 
@@ -461,7 +478,7 @@ def _(
     mo.md(
         f"**Real records:** {len(real_df)}  |  "
         f"**Simulated records:** {len(sim_df)}  |  "
-        f"**Assays present:** {sorted(real_df['assay'].unique()) if len(real_df) else []}",
+        f"**Configs present:** {sorted(real_df['config'].unique()) if len(real_df) else []}",
     )
     return real_df, sim_df, discovery_curves
 
@@ -477,7 +494,7 @@ def _(np, pd, plt, mo, real_df, sim_df, discovery_curves, time_window_slider):
     )
     _t_eval = 0.5 * (_t_start_plot + _t_end_plot)
 
-    _assays = sorted(real_df["assay"].unique())
+    _configs = sorted(real_df["config"].unique())
     _metric_defs = [
         ("coverage", "Coverage (unique 0.1-unit cells)", "greater"),
         ("revisit", "Revisit rate (samples / cell)", "less"),
@@ -495,20 +512,20 @@ def _(np, pd, plt, mo, real_df, sim_df, discovery_curves, time_window_slider):
 
     for _metric, _title, _direction in _metric_defs:
         _ax = _ax_map[_metric]
-        _real_vals = [real_df.loc[real_df["assay"] == a, _metric].values
-                      for a in _assays]
+        _real_vals = [real_df.loc[real_df["config"] == c, _metric].values
+                      for c in _configs]
         _bp = _ax.boxplot(
-            _real_vals, tick_labels=_assays, widths=0.5,
+            _real_vals, tick_labels=_configs, widths=0.5,
             patch_artist=True,
         )
         for _patch in _bp["boxes"]:
             _patch.set_facecolor("#377eb8")
             _patch.set_alpha(0.55)
 
-        for _i, _assay in enumerate(_assays, start=1):
-            _sim_vals = sim_df.loc[sim_df["assay"] == _assay, _metric].values
-            _real_assay = real_df.loc[real_df["assay"] == _assay, _metric].values
-            if len(_sim_vals) == 0 or len(_real_assay) == 0:
+        for _i, _cfg in enumerate(_configs, start=1):
+            _sim_vals = sim_df.loc[sim_df["config"] == _cfg, _metric].values
+            _real_cfg = real_df.loc[real_df["config"] == _cfg, _metric].values
+            if len(_sim_vals) == 0 or len(_real_cfg) == 0:
                 continue
             _p05, _p50, _p95 = np.percentile(_sim_vals, [5, 50, 95])
             _ax.fill_betweenx(
@@ -523,9 +540,9 @@ def _(np, pd, plt, mo, real_df, sim_df, discovery_curves, time_window_slider):
             )
 
             # Directional empirical p-value, computed per sheep-trial pair
-            # (avg p across all real points for the assay).
+            # (avg p across all real points for the config).
             _p_per_real = []
-            for _rv in _real_assay:
+            for _rv in _real_cfg:
                 if _direction == "greater":
                     _p = float(np.mean(_sim_vals >= _rv))
                 else:
@@ -533,19 +550,19 @@ def _(np, pd, plt, mo, real_df, sim_df, discovery_curves, time_window_slider):
                 _p_per_real.append(_p)
             _p_mean = float(np.mean(_p_per_real)) if _p_per_real else float("nan")
             _pval_rows.append({
-                "Assay": _assay,
+                "Configuration": _cfg,
                 "Metric": _metric,
-                "Real median": round(float(np.median(_real_assay)), 4),
+                "Real median": round(float(np.median(_real_cfg)), 4),
                 "Sim median": round(float(_p50), 4),
                 "Direction": "real > null" if _direction == "greater" else "real < null",
                 "p-value": round(_p_mean, 4),
-                "n_sheep": len(_real_assay),
+                "n_sheep": len(_real_cfg),
             })
         _ax.set_title(_title, fontsize=10)
-        _ax.set_xlabel("Assay")
+        _ax.set_xlabel("Configuration")
         _ax.legend(loc="best", fontsize=7)
 
-    # Bottom-right: cumulative discovery curve per assay
+    # Bottom-right: cumulative discovery curve per configuration
     _ax_d = _axes[1, 1]
     _n_sites = 12
     _t_grid = np.linspace(0, 40, 81)  # 0–40 min, 0.5 min steps
@@ -563,12 +580,12 @@ def _(np, pd, plt, mo, real_df, sim_df, discovery_curves, time_window_slider):
         return np.mean(np.stack(per, axis=0), axis=0)
 
     _colours = ["#377eb8", "#4daf4a", "#984ea3", "#ff7f00", "#a65628", "#999999"]
-    for _ci, _assay in enumerate(_assays):
+    for _ci, _cfg in enumerate(_configs):
         _col = _colours[_ci % len(_colours)]
-        _bucket = discovery_curves.get(_assay, {"real": [], "sim": []})
+        _bucket = discovery_curves.get(_cfg, {"real": [], "sim": []})
         _real_curve = _cum_curve(_bucket["real"], _t_grid)
         _ax_d.plot(_t_grid, _real_curve, color=_col, lw=2.0,
-                   label=f"{_assay} real")
+                   label=f"{_cfg} real")
         if _bucket["sim"]:
             _sim_curves = np.stack(
                 [_cum_curve([ft], _t_grid) for ft in _bucket["sim"]], axis=0,
@@ -585,7 +602,7 @@ def _(np, pd, plt, mo, real_df, sim_df, discovery_curves, time_window_slider):
             _sim_mid = _sim_curves[:, _t_idx]
             _p = float(np.mean(_sim_mid >= _real_mid)) if len(_sim_mid) else float("nan")
             _pval_rows.append({
-                "Assay": _assay,
+                "Configuration": _cfg,
                 "Metric": f"sites_found_t{_t_eval:g}",
                 "Real median": round(_real_mid, 3),
                 "Sim median": round(float(np.median(_sim_mid)), 3),
@@ -631,31 +648,32 @@ def _(np, pd, plt, mo, real_df, sim_df):
     """
     mo.stop(len(real_df) == 0, mo.md("*No sheep matched the current filter — diagnostic skipped.*"))
 
-    _assays_d = sorted(real_df["assay"].unique())
+    _configs_d = sorted(real_df["config"].unique())
     _metrics_d = [
         ("coverage", "Coverage (unique cells)"),
         ("revisit", "Revisit rate (samples/cell)"),
         ("straightness", "Straightness (disp/path)"),
-        ("time_at_sites", "Time at reward sites (fraction)"),
+        ("time_at_baited", "Time at BAITED sites (3 sites)"),
+        ("time_at_unbaited", "Time at UNBAITED sites (9 sites)"),
     ]
 
-    _fig_d, _axes_d = plt.subplots(1, 4, figsize=(19, 5))
+    _fig_d, _axes_d = plt.subplots(1, 5, figsize=(22, 5))
     _summary_rows = []
     _jitter_rng = np.random.default_rng(42)
 
     for _ax_diag, (_metric_d, _label_d) in zip(_axes_d, _metrics_d):
-        _sim_per_assay = [
-            sim_df.loc[sim_df["assay"] == _a, _metric_d].values
-            for _a in _assays_d
+        _sim_per_cfg = [
+            sim_df.loc[sim_df["config"] == _c, _metric_d].values
+            for _c in _configs_d
         ]
-        _real_per_assay = [
-            real_df.loc[real_df["assay"] == _a, _metric_d].values
-            for _a in _assays_d
+        _real_per_cfg = [
+            real_df.loc[real_df["config"] == _c, _metric_d].values
+            for _c in _configs_d
         ]
 
         _vp = _ax_diag.violinplot(
-            _sim_per_assay,
-            positions=range(1, len(_assays_d) + 1),
+            _sim_per_cfg,
+            positions=range(1, len(_configs_d) + 1),
             widths=0.75, showmedians=True, showextrema=False,
         )
         for _body in _vp["bodies"]:
@@ -666,8 +684,8 @@ def _(np, pd, plt, mo, real_df, sim_df):
             _vp["cmedians"].set_color("#444444")
             _vp["cmedians"].set_linewidth(1.2)
 
-        for _i, (_a, _sv, _rv) in enumerate(
-            zip(_assays_d, _sim_per_assay, _real_per_assay), start=1,
+        for _i, (_c, _sv, _rv) in enumerate(
+            zip(_configs_d, _sim_per_cfg, _real_per_cfg), start=1,
         ):
             if len(_sv) == 0 or len(_rv) == 0:
                 continue
@@ -684,8 +702,6 @@ def _(np, pd, plt, mo, real_df, sim_df):
             _outside = float(
                 np.mean((_rv < _sim_p05) | (_rv > _sim_p95)),
             )
-            # Two-sided empirical p: per real point, p_i = 2 * min(P(sim<=r),
-            # P(sim>=r)); aggregate by mean across real points.
             _p_two = float(np.mean([
                 2.0 * min(
                     float(np.mean(_sv <= _r)),
@@ -694,7 +710,7 @@ def _(np, pd, plt, mo, real_df, sim_df):
                 for _r in _rv
             ]))
             _summary_rows.append({
-                "Assay": _a,
+                "Configuration": _c,
                 "Metric": _metric_d,
                 "Real median": round(float(np.median(_rv)), 3),
                 "Sim median": round(_sim_med, 3),
@@ -704,9 +720,9 @@ def _(np, pd, plt, mo, real_df, sim_df):
                 "n_sheep": int(len(_rv)),
             })
 
-        _ax_diag.set_xticks(range(1, len(_assays_d) + 1))
-        _ax_diag.set_xticklabels(_assays_d)
-        _ax_diag.set_xlabel("Assay")
+        _ax_diag.set_xticks(range(1, len(_configs_d) + 1))
+        _ax_diag.set_xticklabels(_configs_d)
+        _ax_diag.set_xlabel("Configuration")
         _ax_diag.set_title(_label_d, fontsize=10)
 
     _fig_d.suptitle(
@@ -724,6 +740,155 @@ def _(np, pd, plt, mo, real_df, sim_df):
         ),
         _fig_d,
         mo.ui.table(_summary_df),
+    ])
+    return
+
+
+@app.cell(hide_code=True)
+def _(np, pd, plt, mo, real_df, sim_df):
+    """Baited preference — the most direct test of 'sheep navigate to reward'.
+
+    For each (sheep-trial, walk), measure the fraction of site-visit time
+    that lands on baited rather than unbaited canonical positions:
+
+        baited_fraction = time_at_baited / (time_at_baited + time_at_unbaited)
+
+    A random walker should land at chance ≈ 3/12 = 0.25 (3 of 12 sites are
+    baited). Real sheep should be well above 0.25 if they navigate to
+    reward. CTRL trials are excluded from the test population since they
+    don't have a meaningful baited triplet in the canonical frame
+    (orientation transforms map test-config bait → A-prefix positions;
+    CTRL trials don't get the same transform).
+    """
+    mo.stop(
+        len(real_df) == 0,
+        mo.md("*No sheep matched the current filter — baited preference skipped.*"),
+    )
+
+    def _frac(df):
+        _tb = df["time_at_baited"].to_numpy()
+        _tu = df["time_at_unbaited"].to_numpy()
+        _denom = _tb + _tu
+        _valid = _denom > 0
+        _out = np.full_like(_tb, np.nan, dtype=float)
+        _out[_valid] = _tb[_valid] / _denom[_valid]
+        return _out
+
+    _real_bp = real_df.assign(baited_fraction=_frac(real_df))
+    _sim_bp = sim_df.assign(baited_fraction=_frac(sim_df))
+
+    # Drop CTRL from this panel — see docstring.
+    _test_configs = [_c for _c in sorted(_real_bp["config"].unique()) if _c != "CTRL"]
+    _chance = 3.0 / 12.0  # 3 baited of 12 total canonical sites
+
+    _real_per = [
+        _real_bp.loc[_real_bp["config"] == _c, "baited_fraction"].dropna().to_numpy()
+        for _c in _test_configs
+    ]
+    _sim_per = [
+        _sim_bp.loc[_sim_bp["config"] == _c, "baited_fraction"].dropna().to_numpy()
+        for _c in _test_configs
+    ]
+
+    _fig_bp, (_ax_bp, _ax_dist) = plt.subplots(1, 2, figsize=(15, 5))
+
+    # Left panel: per-config violin (sim) + scatter (real).
+    _vp_bp = _ax_bp.violinplot(
+        _sim_per, positions=range(1, len(_test_configs) + 1),
+        widths=0.75, showmedians=True, showextrema=False,
+    )
+    for _body in _vp_bp["bodies"]:
+        _body.set_facecolor("#cccccc")
+        _body.set_edgecolor("#888888")
+        _body.set_alpha(0.55)
+    if "cmedians" in _vp_bp:
+        _vp_bp["cmedians"].set_color("#444444")
+        _vp_bp["cmedians"].set_linewidth(1.2)
+
+    _jit_rng_bp = np.random.default_rng(0)
+    _rows_bp = []
+    for _i, (_c, _sv, _rv) in enumerate(zip(_test_configs, _sim_per, _real_per), start=1):
+        if len(_sv) == 0 or len(_rv) == 0:
+            continue
+        _jit = _jit_rng_bp.uniform(-0.18, 0.18, size=len(_rv))
+        _ax_bp.scatter(
+            _i + _jit, _rv, s=18,
+            color="#d7301f", alpha=0.7,
+            edgecolor="white", linewidth=0.4, zorder=3,
+        )
+        _sim_med = float(np.median(_sv))
+        _real_med = float(np.median(_rv))
+        _sim_std = float(np.std(_sv))
+        _z = (_real_med - _sim_med) / max(_sim_std, 1e-9)
+        # One-sided "real > sim" empirical p, per sheep then mean.
+        _p = float(np.mean([float(np.mean(_sv >= _r)) for _r in _rv]))
+        _rows_bp.append({
+            "Configuration": _c,
+            "Real median": round(_real_med, 3),
+            "Sim median": round(_sim_med, 3),
+            "Chance (3/12)": round(_chance, 3),
+            "Real − Chance": round(_real_med - _chance, 3),
+            "z (real − sim)/σ_sim": round(_z, 2),
+            "p (real > null)": round(_p, 4),
+            "n_sheep": int(len(_rv)),
+        })
+
+    _ax_bp.axhline(_chance, color="#377eb8", lw=1.2, ls="--", alpha=0.7,
+                   label=f"Spatial chance ({_chance:.2f})")
+    _ax_bp.set_xticks(range(1, len(_test_configs) + 1))
+    _ax_bp.set_xticklabels(_test_configs)
+    _ax_bp.set_xlabel("Configuration")
+    _ax_bp.set_ylabel("baited / (baited + unbaited) site-time")
+    _ax_bp.set_title("Baited preference per config\n(grey = sim, red = real sheep)", fontsize=10)
+    _ax_bp.set_ylim(-0.05, 1.05)
+    _ax_bp.legend(loc="best", fontsize=8)
+
+    # Right panel: pooled distribution real vs sim across all test configs.
+    _real_pool = _real_bp.loc[
+        _real_bp["config"].isin(_test_configs), "baited_fraction"
+    ].dropna().to_numpy()
+    _sim_pool = _sim_bp.loc[
+        _sim_bp["config"].isin(_test_configs), "baited_fraction"
+    ].dropna().to_numpy()
+    if len(_real_pool) > 0 and len(_sim_pool) > 0:
+        _bins_bp = np.linspace(0.0, 1.0, 31)
+        _ax_dist.hist(
+            _sim_pool, bins=_bins_bp, density=True,
+            color="#888888", alpha=0.55, label=f"Sim (n={len(_sim_pool)})",
+        )
+        _ax_dist.hist(
+            _real_pool, bins=_bins_bp, density=True,
+            color="#d7301f", alpha=0.6, label=f"Real (n={len(_real_pool)})",
+        )
+        _ax_dist.axvline(_chance, color="#377eb8", lw=1.2, ls="--",
+                         label=f"Chance ({_chance:.2f})")
+        _ax_dist.axvline(float(np.median(_real_pool)), color="#7a0a0a", lw=1.5)
+        _ax_dist.axvline(float(np.median(_sim_pool)), color="#444444", lw=1.5)
+    _ax_dist.set_xlabel("baited / (baited + unbaited) site-time")
+    _ax_dist.set_ylabel("density")
+    _ax_dist.set_title("Pooled across A/B/C/D", fontsize=10)
+    _ax_dist.legend(loc="best", fontsize=8)
+
+    _fig_bp.suptitle(
+        "Baited preference — direct test of 'sheep navigate to reward sites'",
+        fontsize=12,
+    )
+    _fig_bp.tight_layout()
+
+    _bp_df = pd.DataFrame(_rows_bp)
+    mo.vstack([
+        mo.md("### Baited vs unbaited site preference"),
+        mo.md(
+            "After `apply_orient=True`, every test trial's baited triplet "
+            "maps to the canonical A1/A2/A3 positions, so 'baited' is a "
+            "well-defined set in this frame. A random walker should hit "
+            "baited at chance ≈ 3/12 = 0.25 of its site-time; sheep that "
+            "navigate to reward should sit well above. CTRL configurations "
+            "are excluded here because they don't share the canonical "
+            "orientation."
+        ),
+        _fig_bp,
+        mo.ui.table(_bp_df),
     ])
     return
 
