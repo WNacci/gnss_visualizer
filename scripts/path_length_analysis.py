@@ -226,7 +226,8 @@ def _(
     np, pd, plt,
 ):
     """Aggregate path length across test-configuration trials."""
-    _TEST_CONFIGS = {'A', 'B', 'C', 'D'}
+    _TEST_CONFIGS = {"A", "B", "C", "D", "CTRL_FAR", "CTRL_BARN"}
+    _CTRL_CONFIGS = {"CTRL_FAR", "CTRL_BARN"}
     _records = []
 
     for _tidx, _trial in enumerate(TRIALS):
@@ -267,8 +268,10 @@ def _(
             'Date': _trial['date'],
             'Field': _trial['field'],
             'Config': _trial['config'],
+            'Group num': _trial['group_num'],
             'Group size': _trial['group_size'],
             'Assay': str(_trial['assay']),
+            'is_control': _trial['config'] in _CTRL_CONFIGS,
             'Sites found': len(_sorted_first),
             'Completion time (min)': round(_completion_time, 2) if _completion_time is not None else None,
             'Mean path to completion (m)': round(float(np.mean(_path_vals)), 1) if _path_vals else None,
@@ -282,19 +285,27 @@ def _(
 
     _fig2, (_ax1, _ax2) = plt.subplots(1, 2, figsize=(12, 4))
 
-    # Box plots by assay
-    _assays = sorted(_agg_df['Assay'].unique(), key=lambda x: (not x.isdigit(), x))
-    _ct_by_assay = [_agg_df[_agg_df['Assay'] == a]['Completion time (min)'].dropna().values
-                    for a in _assays]
-    _pl_by_assay = [_agg_df[_agg_df['Assay'] == a]['Mean path to completion (m)'].dropna().values
-                    for a in _assays]
+    # Box plots by assay — test trials per-assay, controls pooled into one bucket
+    _test_df = _agg_df[~_agg_df['is_control']]
+    _ctrl_df = _agg_df[_agg_df['is_control']]
+    _assays = sorted(
+        _test_df['Assay'].astype(str).unique(),
+        key=lambda x: (not x.isdigit(), x),
+    )
+    _xlabels = _assays + ['CTRL']
 
-    _ax1.boxplot(_ct_by_assay, labels=_assays)
+    def _bucket(col):
+        return [
+            _test_df[_test_df['Assay'].astype(str) == a][col].dropna().values
+            for a in _assays
+        ] + [_ctrl_df[col].dropna().values]
+
+    _ax1.boxplot(_bucket('Completion time (min)'), labels=_xlabels)
     _ax1.set_xlabel("Assay")
     _ax1.set_ylabel("Completion time (min)")
     _ax1.set_title("Time to find 3rd site")
 
-    _ax2.boxplot(_pl_by_assay, labels=_assays)
+    _ax2.boxplot(_bucket('Mean path to completion (m)'), labels=_xlabels)
     _ax2.set_xlabel("Assay")
     _ax2.set_ylabel("Mean path length (m)")
     _ax2.set_title("Path length to find 3rd site")
@@ -306,6 +317,175 @@ def _(
         _fig2,
         mo.md("### Aggregate table"),
         mo.ui.table(_agg_df),
+    ])
+    return
+
+
+@app.cell(hide_code=True)
+def _(
+    TRIALS, mo,
+    TRACKS_CACHE, load_trial_tracks, detect_site_visits,
+    cumulative_path_length, DATA_DIR,
+    np, pd,
+):
+    """Compute assay-shuffle null for the learning trend.
+
+    For each test trial, compute completion_time, path_length, sites_found at
+    radius=0.5 with N=3 sites.  Observed Spearman rho is assay vs metric.  The
+    null permutes assay labels within each group_num (preserving per-group
+    structure) ``N_PERMUTATIONS`` times.
+    """
+    from scipy.stats import spearmanr
+
+    _TEST_CONFIGS_NULL = {"A", "B", "C", "D"}
+    _RADIUS = 0.5
+    _N_NEEDED = 3
+    N_PERMUTATIONS = 1000
+
+    _rdf_null = pd.read_csv(DATA_DIR / "fitted_reward_sites.csv")
+    _rows = []
+    for _tidx, _trial in enumerate(TRIALS):
+        if _trial['config'] not in _TEST_CONFIGS_NULL:
+            continue
+        if _trial['assay'] is None:
+            continue
+        try:
+            _assay_int = int(_trial['assay'])
+        except (TypeError, ValueError):
+            continue
+        _tracks = load_trial_tracks(
+            _trial, tracks_cache=TRACKS_CACHE, apply_orient=True,
+        )
+        if not _tracks:
+            continue
+        _visits = detect_site_visits(
+            _tracks, _trial['field'], radius=_RADIUS,
+            reward_sites_df=_rdf_null,
+        )
+        _first_visits = {}
+        for _lbl, _vlist in _visits.items():
+            if _vlist:
+                _first_visits[_lbl] = min(v[1] for v in _vlist)
+        _sorted_first = sorted(_first_visits.items(), key=lambda x: x[1])
+        _completion_time = (
+            _sorted_first[_N_NEEDED - 1][1]
+            if len(_sorted_first) >= _N_NEEDED else None
+        )
+        _path_vals = []
+        for _sheep_id, _trk in _tracks.items():
+            _gx, _gy, _t = _trk['gx'], _trk['gy'], _trk['t']
+            _pl = cumulative_path_length(_gx, _gy) * 10.0
+            if _completion_time is not None:
+                _idx_c = np.searchsorted(_t, _completion_time)
+                if _idx_c < len(_pl):
+                    _path_vals.append(_pl[_idx_c])
+        _rows.append({
+            'trial': _tidx,
+            'group_num': _trial['group_num'],
+            'assay': _assay_int,
+            'completion_time': _completion_time,
+            'path_length': float(np.mean(_path_vals)) if _path_vals else None,
+            'sites_found': len(_sorted_first),
+        })
+
+    null_trial_df = pd.DataFrame(_rows)
+
+    NULL_METRICS = ['completion_time', 'path_length', 'sites_found']
+    null_results = {}
+    _rng = np.random.default_rng(seed=42)
+
+    for _metric in NULL_METRICS:
+        _sub = null_trial_df[['group_num', 'assay', _metric]].dropna()
+        if len(_sub) < 3:
+            null_results[_metric] = None
+            continue
+        _assay_vals = _sub['assay'].to_numpy()
+        _metric_vals = _sub[_metric].to_numpy(dtype=float)
+        _groups = _sub['group_num'].to_numpy()
+        _observed_rho, _ = spearmanr(_assay_vals, _metric_vals)
+
+        # Preserve per-group structure: shuffle assay only within each group_num
+        _null_rhos = np.empty(N_PERMUTATIONS)
+        _group_idx = {
+            g: np.where(_groups == g)[0]
+            for g in np.unique(_groups)
+        }
+        for _i in range(N_PERMUTATIONS):
+            _shuffled = _assay_vals.copy()
+            for _idxs in _group_idx.values():
+                if len(_idxs) > 1:
+                    _shuffled[_idxs] = _rng.permutation(_shuffled[_idxs])
+            _rho_i, _ = spearmanr(_shuffled, _metric_vals)
+            _null_rhos[_i] = _rho_i if np.isfinite(_rho_i) else 0.0
+
+        _p_emp = float((np.abs(_null_rhos) >= np.abs(_observed_rho)).mean())
+        null_results[_metric] = {
+            'observed_rho': float(_observed_rho),
+            'null_mean': float(np.mean(_null_rhos)),
+            'null_low': float(np.quantile(_null_rhos, 0.025)),
+            'null_high': float(np.quantile(_null_rhos, 0.975)),
+            'p_emp': _p_emp,
+            'null_rhos': _null_rhos,
+            'n': int(len(_sub)),
+        }
+
+    print(f"Assay-shuffle null (N={N_PERMUTATIONS}):")
+    for _m in NULL_METRICS:
+        _r = null_results[_m]
+        if _r is None:
+            print(f"  {_m}: insufficient data")
+            continue
+        print(
+            f"  {_m}: n={_r['n']}, rho_obs={_r['observed_rho']:+.3f}, "
+            f"null_mean={_r['null_mean']:+.3f}, "
+            f"95% CI=[{_r['null_low']:+.3f}, {_r['null_high']:+.3f}], "
+            f"p_emp={_r['p_emp']:.3f}"
+        )
+    return null_trial_df, null_results, NULL_METRICS, N_PERMUTATIONS
+
+
+@app.cell(hide_code=True)
+def _(null_results, NULL_METRICS, N_PERMUTATIONS, mo, pd, plt):
+    """Histogram of null Spearman rho per metric + summary table."""
+    _valid = [(m, null_results[m]) for m in NULL_METRICS if null_results[m] is not None]
+    if not _valid:
+        mo.stop(True, mo.md("*Not enough data for null computation.*"))
+
+    _fig3, _axes = plt.subplots(1, 3, figsize=(13, 4))
+    for _ax, (_m, _r) in zip(_axes, _valid):
+        _ax.hist(_r['null_rhos'], bins=40, color='#888', alpha=0.75)
+        _ax.axvline(_r['observed_rho'], color='#d63b3b', lw=2,
+                    label=f"observed ρ={_r['observed_rho']:+.3f}")
+        _ax.axvline(_r['null_low'], color='#444', lw=0.8, ls='--')
+        _ax.axvline(_r['null_high'], color='#444', lw=0.8, ls='--')
+        _ax.set_title(f"{_m}\n(p={_r['p_emp']:.3f}, n={_r['n']})")
+        _ax.set_xlabel("Spearman ρ (assay vs metric)")
+        _ax.set_ylabel("Null count")
+        _ax.legend(fontsize=8, loc='upper left')
+    _fig3.suptitle(
+        f"Null distributions: assay shuffled within group_num "
+        f"(N={N_PERMUTATIONS} permutations)"
+    )
+    _fig3.tight_layout()
+
+    _summary = pd.DataFrame([
+        {
+            'metric': _m,
+            'n': _r['n'],
+            'observed_rho': round(_r['observed_rho'], 4),
+            'null_mean': round(_r['null_mean'], 4),
+            'null_low': round(_r['null_low'], 4),
+            'null_high': round(_r['null_high'], 4),
+            'p_emp': round(_r['p_emp'], 4),
+        }
+        for _m, _r in _valid
+    ])
+
+    mo.vstack([
+        mo.md("---\n## Assay-shuffle null: does the learning trend beat chance?"),
+        _fig3,
+        mo.md("### Null summary"),
+        mo.ui.table(_summary),
     ])
     return
 
