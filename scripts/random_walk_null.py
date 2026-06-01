@@ -215,14 +215,109 @@ def _(np, ARENA_LO, ARENA_HI, COVERAGE_BIN, SITE_GRID, SITE_RADIUS):
 
 
 @app.cell(hide_code=True)
+def _(np, ARENA_LO, ARENA_HI, COVERAGE_BIN, SITE_GRID, SITE_RADIUS):
+    """Batched (K-walk) simulator and metrics — single numpy op per metric per sheep."""
+    _N_BINS_B = int(round((ARENA_HI - ARENA_LO) / COVERAGE_BIN))
+
+    def _reflect_b(arr, lo, hi):
+        span = hi - lo
+        u = (arr - lo) % (2 * span)
+        return lo + np.where(u <= span, u, 2 * span - u)
+
+    def simulate_walks_batch(start_xy, n_steps, steps_emp, turns_emp, K, rng):
+        """Run K correlated random walks in parallel.
+
+        Returns gx, gy of shape (K, n_steps + 1). Reuses the empirical pools
+        IID across walks (turn-angle order within a walk is preserved via
+        cumsum, matching the single-walk simulator).
+        """
+        x0, y0 = start_xy
+        if len(steps_emp) == 0 or n_steps <= 0 or K <= 0:
+            return (np.full((max(K, 1), 1), x0, dtype=float),
+                    np.full((max(K, 1), 1), y0, dtype=float))
+        if len(turns_emp) == 0:
+            turns_emp = np.array([0.0])
+        sampled_steps = rng.choice(steps_emp, size=(K, n_steps))
+        sampled_turns = rng.choice(turns_emp, size=(K, n_steps))
+        heading0 = rng.uniform(-np.pi, np.pi, size=K)
+        headings = heading0[:, None] + np.cumsum(sampled_turns, axis=1)
+        dx = sampled_steps * np.cos(headings)
+        dy = sampled_steps * np.sin(headings)
+        x_unb = np.concatenate(
+            [np.full((K, 1), x0), x0 + np.cumsum(dx, axis=1)], axis=1,
+        )
+        y_unb = np.concatenate(
+            [np.full((K, 1), y0), y0 + np.cumsum(dy, axis=1)], axis=1,
+        )
+        return (
+            _reflect_b(x_unb, ARENA_LO, ARENA_HI),
+            _reflect_b(y_unb, ARENA_LO, ARENA_HI),
+        )
+
+    _N_CELLS_B = _N_BINS_B * _N_BINS_B
+
+    def coverage_batch(gx, gy):
+        K, T = gx.shape
+        if T == 0:
+            return np.zeros(K, dtype=int)
+        ix = np.clip(((gx - ARENA_LO) / COVERAGE_BIN).astype(int), 0, _N_BINS_B - 1)
+        iy = np.clip(((gy - ARENA_LO) / COVERAGE_BIN).astype(int), 0, _N_BINS_B - 1)
+        # Encode (walk, cell) as walk*N + cell, then one big bincount over all K walks.
+        k_off = np.arange(K, dtype=np.int64)[:, None] * _N_CELLS_B
+        encoded = (k_off + ix * _N_BINS_B + iy).ravel()
+        counts = np.bincount(encoded, minlength=K * _N_CELLS_B).reshape(K, _N_CELLS_B)
+        return (counts > 0).sum(axis=1)
+
+    def revisit_rate_batch(gx, gy, cov=None):
+        if cov is None:
+            cov = coverage_batch(gx, gy)
+        return gx.shape[1] / np.maximum(cov, 1).astype(float)
+
+    def straightness_batch(gx, gy):
+        if gx.shape[1] < 2:
+            return np.zeros(gx.shape[0])
+        d = np.hypot(gx[:, -1] - gx[:, 0], gy[:, -1] - gy[:, 0])
+        path = np.sum(np.hypot(np.diff(gx, axis=1), np.diff(gy, axis=1)), axis=1)
+        return np.where(path > 0, d / path, 0.0)
+
+    def sites_found_by_time_batch(gx, gy, t, sites=SITE_GRID, radius=SITE_RADIUS):
+        """First-visit times per walk for each canonical site. Returns list of K sorted lists."""
+        K = gx.shape[0]
+        t_arr = np.asarray(t, dtype=float)
+        first_times_per_k = [[] for _ in range(K)]
+        for _label, (sx, sy) in sites.items():
+            dist = np.hypot(gx - sx, gy - sy)
+            inside = dist <= radius
+            any_inside = inside.any(axis=1)
+            first_idx = inside.argmax(axis=1)
+            for k in range(K):
+                if any_inside[k]:
+                    first_times_per_k[k].append(float(t_arr[first_idx[k]]))
+        for ft in first_times_per_k:
+            ft.sort()
+        return first_times_per_k
+
+    return (
+        simulate_walks_batch, coverage_batch, revisit_rate_batch,
+        straightness_batch, sites_found_by_time_batch,
+    )
+
+
+@app.cell(hide_code=True)
 def _(
     np, pd, mo,
     TRIALS, TRACKS_CACHE, load_trial_tracks,
     KEEP_CONFIGS, PHASE2_DATE,
-    fit_movement_stats, simulate_walk,
+    fit_movement_stats,
     coverage, revisit_rate, straightness, sites_found_by_time,
+    simulate_walks_batch, coverage_batch, revisit_rate_batch,
+    straightness_batch, sites_found_by_time_batch,
     K_slider, phase_dd, time_window_slider,
 ):
+    # Decimate 10 Hz tracks to 1 Hz before fitting/simulating. Both real and
+    # simulated trajectories are decimated identically so the null comparison
+    # stays internally consistent. ~20× speedup over running at full rate.
+    _DECIMATE = 10
     # Results are cached on (K, phase, window) so re-renders skip the heavy loop.
     _t_start, _t_end = (
         float(time_window_slider.value[0]),
@@ -265,9 +360,12 @@ def _(
                 _gy_full = np.asarray(_trk["gy"], dtype=float)
                 _t_full = np.asarray(_trk["t"], dtype=float)
                 _mask = (_t_full >= _t_start) & (_t_full <= _t_end)
-                _gx = _gx_full[_mask]
-                _gy = _gy_full[_mask]
-                _t = _t_full[_mask]
+                # Decimate from 10 Hz → 1 Hz: ~20× faster, plenty of resolution
+                # for a null model. Real and simulated tracks get the same
+                # treatment so the comparison stays internally consistent.
+                _gx = _gx_full[_mask][::_DECIMATE]
+                _gy = _gy_full[_mask][::_DECIMATE]
+                _t = _t_full[_mask][::_DECIMATE]
                 if len(_gx) < 20:
                     continue
 
@@ -293,28 +391,30 @@ def _(
 
                 _n_steps = len(_gx) - 1
                 _start = (float(_gx[0]), float(_gy[0]))
+                _sgx_all, _sgy_all = simulate_walks_batch(
+                    _start, _n_steps, _steps_emp, _turns_emp, K, _sim_rng,
+                )
+                # Reuse the empirical time-vector for simulated walks so site
+                # discovery curves are directly comparable.
+                _st = _t[: _sgx_all.shape[1]]
+                _sim_covs = coverage_batch(_sgx_all, _sgy_all)
+                _sim_revs = revisit_rate_batch(_sgx_all, _sgy_all, cov=_sim_covs)
+                _sim_strs = straightness_batch(_sgx_all, _sgy_all)
+                _sim_sites_list = sites_found_by_time_batch(
+                    _sgx_all, _sgy_all, _st,
+                )
                 for _k in range(K):
-                    _sgx, _sgy = simulate_walk(
-                        _start, _n_steps, _steps_emp, _turns_emp, _sim_rng,
-                    )
-                    # Reuse the empirical time-vector for simulated walks so
-                    # site discovery curves are directly comparable.
-                    _st = _t[: len(_sgx)]
-                    _sim_cov = coverage(_sgx, _sgy)
-                    _sim_rev = revisit_rate(_sgx, _sgy)
-                    _sim_str = straightness(_sgx, _sgy)
-                    _sim_sites = sites_found_by_time(_sgx, _sgy, _st)
                     sim_records.append({
                         "assay": _assay,
                         "trial_idx": _tidx,
                         "sheep": _sheep_id,
                         "k": _k,
-                        "coverage": _sim_cov,
-                        "revisit": _sim_rev,
-                        "straightness": _sim_str,
-                        "n_sites": len(_sim_sites),
+                        "coverage": int(_sim_covs[_k]),
+                        "revisit": float(_sim_revs[_k]),
+                        "straightness": float(_sim_strs[_k]),
+                        "n_sites": len(_sim_sites_list[_k]),
                     })
-                    _bucket["sim"].append(_sim_sites)
+                    _bucket["sim"].append(_sim_sites_list[_k])
 
         _cache[_CACHE_KEY] = (sim_records, real_records, discovery_curves)
         print(
