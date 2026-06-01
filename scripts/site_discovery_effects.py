@@ -641,7 +641,18 @@ def _(mo):
 
 @app.cell(hide_code=True)
 def _(events_df, np, pd, plt, mo):
-    """Per-event coin-flip swap of (before, after) labels; two-sided empirical p."""
+    """Per-event coin-flip swap of (before, after); label-symmetric null.
+
+    Original implementation used `pct = (a-b)/max(b, 0.01)` as the null
+    statistic. That isn't label-symmetric: swapping (a, b) changes the
+    denominator too, so the null distribution is computed differently from
+    the observed value and the comparison degenerates to p≈0 or p≈1.
+
+    Fix: use the signed difference `a - b` as the null statistic. It IS
+    label-symmetric (swap → negation) so the null is centred on zero under
+    H0 of no effect. The biological "% change" stays in the table for
+    interpretation, but it isn't what the permutation is testing.
+    """
     _N_PERMUTATIONS = 1000
     _rng_c = np.random.default_rng(seed=42)
 
@@ -650,35 +661,40 @@ def _(events_df, np, pd, plt, mo):
     _pb = events_df['spread_before'].to_numpy()
     _pa = events_df['spread_after'].to_numpy()
 
-    _obs_speed = float((100 * (_sa - _sb) / np.maximum(_sb, 0.01)).mean())
-    _obs_spread = float((100 * (_pa - _pb) / np.maximum(_pb, 0.01)).mean())
+    # Display metric (asymmetric % change) — for biological reporting only.
+    _obs_speed_pct = float((100 * (_sa - _sb) / np.maximum(_sb, 0.01)).mean())
+    _obs_spread_pct = float((100 * (_pa - _pb) / np.maximum(_pb, 0.01)).mean())
+    # Null statistic (label-symmetric signed difference) — what the
+    # permutation actually tests.
+    _obs_speed_diff = float((_sa - _sb).mean())
+    _obs_spread_diff = float((_pa - _pb).mean())
 
     _n_events = len(_sb)
     _swap = _rng_c.random((_N_PERMUTATIONS, _n_events)) < 0.5
-    _b_s = np.where(_swap, _sa, _sb)
-    _a_s = np.where(_swap, _sb, _sa)
-    _b_p = np.where(_swap, _pa, _pb)
-    _a_p = np.where(_swap, _pb, _pa)
-    _null_speed = (100 * (_a_s - _b_s) / np.maximum(_b_s, 0.01)).mean(axis=1)
-    _null_spread = (100 * (_a_p - _b_p) / np.maximum(_b_p, 0.01)).mean(axis=1)
+    # Under swap, (a, b) → (b, a), so diff flips sign — symmetric null.
+    _signs = np.where(_swap, -1.0, 1.0)
+    _null_speed = ((_sa - _sb) * _signs).mean(axis=1)
+    _null_spread = ((_pa - _pb) * _signs).mean(axis=1)
 
-    _p_speed = float((np.abs(_null_speed) >= np.abs(_obs_speed)).mean())
-    _p_spread = float((np.abs(_null_spread) >= np.abs(_obs_spread)).mean())
+    _p_speed = float((np.abs(_null_speed) >= np.abs(_obs_speed_diff)).mean())
+    _p_spread = float((np.abs(_null_spread) >= np.abs(_obs_spread_diff)).mean())
 
     perm_summary = pd.DataFrame([
         {
-            'metric': 'speed_pct',
-            'observed_mean': _obs_speed,
-            'null_mean': float(_null_speed.mean()),
+            'metric': 'speed',
+            'observed_diff': _obs_speed_diff,
+            'observed_pct': _obs_speed_pct,
+            'null_mean_diff': float(_null_speed.mean()),
             'null_ci_lo': float(np.percentile(_null_speed, 2.5)),
             'null_ci_hi': float(np.percentile(_null_speed, 97.5)),
             'p_two_sided': _p_speed,
             'n_events': _n_events,
         },
         {
-            'metric': 'spread_pct',
-            'observed_mean': _obs_spread,
-            'null_mean': float(_null_spread.mean()),
+            'metric': 'spread',
+            'observed_diff': _obs_spread_diff,
+            'observed_pct': _obs_spread_pct,
+            'null_mean_diff': float(_null_spread.mean()),
             'null_ci_lo': float(np.percentile(_null_spread, 2.5)),
             'null_ci_hi': float(np.percentile(_null_spread, 97.5)),
             'p_two_sided': _p_spread,
@@ -688,34 +704,123 @@ def _(events_df, np, pd, plt, mo):
 
     _fig_p, (_ax_ns, _ax_np) = plt.subplots(1, 2, figsize=(13, 4.5))
     _ax_ns.hist(_null_speed, bins=40, color='#2171b5', alpha=0.7)
-    _ax_ns.axvline(_obs_speed, color='red', lw=2, label=f"observed = {_obs_speed:.2f}%")
-    _ax_ns.set_title(f"Speed null (p = {_p_speed:.3f})")
-    _ax_ns.set_xlabel("% change (null draws)")
+    _ax_ns.axvline(_obs_speed_diff, color='red', lw=2,
+                   label=f"observed = {_obs_speed_diff:.3f} (m/min)")
+    _ax_ns.set_title(f"Speed Δ null (p = {_p_speed:.3f})")
+    _ax_ns.set_xlabel("Δspeed (after − before, m/min)")
     _ax_ns.set_ylabel("count")
     _ax_ns.legend()
     _ax_np.hist(_null_spread, bins=40, color='#d7191c', alpha=0.7)
-    _ax_np.axvline(_obs_spread, color='red', lw=2, label=f"observed = {_obs_spread:.2f}%")
-    _ax_np.set_title(f"Spread null (p = {_p_spread:.3f})")
-    _ax_np.set_xlabel("% change (null draws)")
+    _ax_np.axvline(_obs_spread_diff, color='red', lw=2,
+                   label=f"observed = {_obs_spread_diff:.3f} (m)")
+    _ax_np.set_title(f"Spread Δ null (p = {_p_spread:.3f})")
+    _ax_np.set_xlabel("Δspread (after − before, m)")
     _ax_np.set_ylabel("count")
     _ax_np.legend()
     _fig_p.suptitle(
-        f"Paired permutation null — coin-flip swap of (before, after) per event, "
-        f"N={_N_PERMUTATIONS}, n_events={_n_events}",
+        f"Paired permutation null — coin-flip swap of (before, after) per event "
+        f"on signed difference statistic, N={_N_PERMUTATIONS}, n_events={_n_events}",
         fontsize=11,
     )
     _fig_p.tight_layout()
 
-    print(f"[Cell C] obs_speed={_obs_speed:.3f}% p={_p_speed:.3f} | "
-          f"obs_spread={_obs_spread:.3f}% p={_p_spread:.3f} | n={_n_events}")
+    print(f"[Cell C] speed Δ={_obs_speed_diff:.3f} (m/min) p={_p_speed:.3f} | "
+          f"spread Δ={_obs_spread_diff:.3f} (m) p={_p_spread:.3f} | n={_n_events}")
     print(perm_summary.to_string(index=False))
 
     mo.vstack([
         _fig_p,
-        mo.md("### Paired permutation null"),
+        mo.md("### Paired permutation null (signed Δ statistic — label-symmetric)"),
         mo.ui.table(perm_summary),
     ])
     return perm_summary
+
+
+@app.cell(hide_code=True)
+def _(events_df, np, plt, mo):
+    """Distribution of real before/after values per event.
+
+    Three panels:
+    - Speed: scatter of speed_before vs speed_after per event (diagonal y=x).
+      Points above the diagonal = sheep sped up after the find.
+    - Spread: scatter of spread_before vs spread_after.
+      Points below the diagonal = group contracted (clustering at find).
+    - Paired Δ distribution: histogram of (after − before) for both
+      speed and spread, with the per-event mean marked.
+    """
+    mo.stop(len(events_df) == 0,
+            mo.md("*No events available — distribution viz skipped.*"))
+
+    _sb = events_df['speed_before'].to_numpy()
+    _sa = events_df['speed_after'].to_numpy()
+    _pb = events_df['spread_before'].to_numpy()
+    _pa = events_df['spread_after'].to_numpy()
+    _d_speed = _sa - _sb
+    _d_spread = _pa - _pb
+
+    _fig_dist, _axes_dist = plt.subplots(1, 3, figsize=(15, 4.8))
+
+    _ax_sp = _axes_dist[0]
+    _lim_sp = (
+        min(float(_sb.min()), float(_sa.min())),
+        max(float(_sb.max()), float(_sa.max())),
+    )
+    _ax_sp.plot(_lim_sp, _lim_sp, color="grey", lw=1.0, ls="--", alpha=0.7,
+                label="y = x (no change)")
+    _ax_sp.scatter(_sb, _sa, s=14, color="#2171b5", alpha=0.55,
+                   edgecolor="white", linewidth=0.3)
+    _ax_sp.set_xlabel("speed_before (m/min)")
+    _ax_sp.set_ylabel("speed_after (m/min)")
+    _ax_sp.set_title(f"Speed (above y=x → sped up; n={len(_sb)})", fontsize=10)
+    _ax_sp.set_aspect("equal", adjustable="datalim")
+    _ax_sp.legend(loc="best", fontsize=8)
+
+    _ax_pr = _axes_dist[1]
+    _lim_pr = (
+        min(float(_pb.min()), float(_pa.min())),
+        max(float(_pb.max()), float(_pa.max())),
+    )
+    _ax_pr.plot(_lim_pr, _lim_pr, color="grey", lw=1.0, ls="--", alpha=0.7,
+                label="y = x (no change)")
+    _ax_pr.scatter(_pb, _pa, s=14, color="#d7191c", alpha=0.55,
+                   edgecolor="white", linewidth=0.3)
+    _ax_pr.set_xlabel("spread_before (m)")
+    _ax_pr.set_ylabel("spread_after (m)")
+    _ax_pr.set_title(f"Spread (below y=x → group contracts; n={len(_pb)})", fontsize=10)
+    _ax_pr.set_aspect("equal", adjustable="datalim")
+    _ax_pr.legend(loc="best", fontsize=8)
+
+    _ax_dd = _axes_dist[2]
+    _bins = 30
+    _ax_dd.hist(_d_speed, bins=_bins, color="#2171b5", alpha=0.55,
+                label=f"Δspeed (m/min), μ={_d_speed.mean():.3f}")
+    _ax_dd.hist(_d_spread, bins=_bins, color="#d7191c", alpha=0.55,
+                label=f"Δspread (m), μ={_d_spread.mean():.3f}")
+    _ax_dd.axvline(0, color="grey", lw=1.0, ls="--", alpha=0.6)
+    _ax_dd.axvline(float(_d_speed.mean()), color="#1141a3", lw=1.5)
+    _ax_dd.axvline(float(_d_spread.mean()), color="#7a0a0a", lw=1.5)
+    _ax_dd.set_xlabel("after − before")
+    _ax_dd.set_ylabel("event count")
+    _ax_dd.set_title("Per-event Δ distribution", fontsize=10)
+    _ax_dd.legend(loc="best", fontsize=8)
+
+    _fig_dist.suptitle(
+        "Distribution of real before/after values per discovery event",
+        fontsize=12,
+    )
+    _fig_dist.tight_layout()
+
+    mo.vstack([
+        mo.md("### Real-data distribution: before vs after per event"),
+        mo.md(
+            "Each point is one (sheep, site) discovery event. Diagonal "
+            "scatter clarifies the *direction* of change per event; the "
+            "right-hand histogram is the paired Δ on which the permutation "
+            "null is computed."
+        ),
+        _fig_dist,
+    ])
+    return
 
 
 if __name__ == "__main__":
