@@ -62,6 +62,10 @@ def _(mo, K_DEFAULT):
         value="All trials",
         label="Trial phase",
     )
+    time_window_slider = mo.ui.range_slider(
+        start=0.0, stop=35.0, step=0.5, value=(0.0, 35.0),
+        label="Trial-time window (min)",
+    )
 
     mo.md(f"""
     # Random-walk null model
@@ -79,10 +83,16 @@ def _(mo, K_DEFAULT):
     - **sites found by time** — cumulative reward-site discovery curve
       (real ahead of null?)
 
+    Use the time-window slider to restrict the analysis to a sub-window of
+    the trial (e.g. only the first 5 min, when behaviour may be less
+    diffusive). Step-length and turn-angle distributions are refit on the
+    selected window and simulated walks have the matching number of steps.
+
     {K_slider}
     {phase_dd}
+    {time_window_slider}
     """)
-    return K_slider, phase_dd
+    return K_slider, phase_dd, time_window_slider
 
 
 @app.cell(hide_code=True)
@@ -211,10 +221,14 @@ def _(
     KEEP_CONFIGS, PHASE2_DATE,
     fit_movement_stats, simulate_walk,
     coverage, revisit_rate, straightness, sites_found_by_time,
-    K_slider, phase_dd,
+    K_slider, phase_dd, time_window_slider,
 ):
-    # Results are cached on (K, phase) so re-renders skip the heavy loop.
-    _CACHE_KEY = (int(K_slider.value), phase_dd.value)
+    # Results are cached on (K, phase, window) so re-renders skip the heavy loop.
+    _t_start, _t_end = (
+        float(time_window_slider.value[0]),
+        float(time_window_slider.value[1]),
+    )
+    _CACHE_KEY = (int(K_slider.value), phase_dd.value, _t_start, _t_end)
     _cache = globals().setdefault("_RW_NULL_CACHE", {})
 
     if _CACHE_KEY in _cache:
@@ -247,9 +261,13 @@ def _(
             _n_trials_used += 1
 
             for _sheep_id, _trk in _tracks.items():
-                _gx = np.asarray(_trk["gx"], dtype=float)
-                _gy = np.asarray(_trk["gy"], dtype=float)
-                _t = np.asarray(_trk["t"], dtype=float)
+                _gx_full = np.asarray(_trk["gx"], dtype=float)
+                _gy_full = np.asarray(_trk["gy"], dtype=float)
+                _t_full = np.asarray(_trk["t"], dtype=float)
+                _mask = (_t_full >= _t_start) & (_t_full <= _t_end)
+                _gx = _gx_full[_mask]
+                _gy = _gy_full[_mask]
+                _t = _t_full[_mask]
                 if len(_gx) < 20:
                     continue
 
@@ -316,9 +334,15 @@ def _(
 
 
 @app.cell(hide_code=True)
-def _(np, pd, plt, mo, real_df, sim_df, discovery_curves):
+def _(np, pd, plt, mo, real_df, sim_df, discovery_curves, time_window_slider):
     if len(real_df) == 0:
         mo.stop(True, mo.md("*No sheep matched the current filter.*"))
+
+    _t_start_plot, _t_end_plot = (
+        float(time_window_slider.value[0]),
+        float(time_window_slider.value[1]),
+    )
+    _t_eval = 0.5 * (_t_start_plot + _t_end_plot)
 
     _assays = sorted(real_df["assay"].unique())
     _metric_defs = [
@@ -422,14 +446,14 @@ def _(np, pd, plt, mo, real_df, sim_df, discovery_curves):
             )
             _ax_d.plot(_t_grid, _sp50, color=_col, lw=1.0, ls="--", alpha=0.7)
 
-            # p-value for sites_found at t=20 min (mid-trial)
-            _t_idx = int(np.argmin(np.abs(_t_grid - 20.0)))
+            # p-value for sites_found at the window midpoint
+            _t_idx = int(np.argmin(np.abs(_t_grid - _t_eval)))
             _real_mid = float(_real_curve[_t_idx])
             _sim_mid = _sim_curves[:, _t_idx]
             _p = float(np.mean(_sim_mid >= _real_mid)) if len(_sim_mid) else float("nan")
             _pval_rows.append({
                 "Assay": _assay,
-                "Metric": "sites_found_t20",
+                "Metric": f"sites_found_t{_t_eval:g}",
                 "Real median": round(_real_mid, 3),
                 "Sim median": round(float(np.median(_sim_mid)), 3),
                 "Direction": "real > null",
@@ -441,6 +465,8 @@ def _(np, pd, plt, mo, real_df, sim_df, discovery_curves):
     _ax_d.set_xlabel("Time (min)")
     _ax_d.set_ylabel("Mean sites found")
     _ax_d.set_ylim(0, _n_sites)
+    _ax_d.set_xlim(_t_start_plot, min(_t_end_plot + 0.5, 40.0))
+    _ax_d.axvline(_t_eval, color="grey", lw=0.6, ls=":", alpha=0.7)
     _ax_d.legend(loc="best", fontsize=7, ncol=2)
 
     _fig.suptitle(
