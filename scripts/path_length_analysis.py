@@ -228,10 +228,13 @@ def _(
     """Aggregate path length across test-configuration trials."""
     _TEST_CONFIGS = {"A", "B", "C", "D", "CTRL_FAR", "CTRL_BARN"}
     _CTRL_CONFIGS = {"CTRL_FAR", "CTRL_BARN"}
+    _PHASE2_DATE = "2026-02-17"
     _records = []
 
     for _tidx, _trial in enumerate(TRIALS):
         if _trial['config'] not in _TEST_CONFIGS:
+            continue
+        if _trial['date'] < _PHASE2_DATE:
             continue
         _tracks = load_trial_tracks(
             _trial, tracks_cache=TRACKS_CACHE,
@@ -338,6 +341,7 @@ def _(
     from scipy.stats import spearmanr
 
     _TEST_CONFIGS_NULL = {"A", "B", "C", "D"}
+    _PHASE2_DATE_NULL = "2026-02-17"
     _RADIUS = 0.5
     _N_NEEDED = 3
     N_PERMUTATIONS = 1000
@@ -346,6 +350,8 @@ def _(
     _rows = []
     for _tidx, _trial in enumerate(TRIALS):
         if _trial['config'] not in _TEST_CONFIGS_NULL:
+            continue
+        if _trial['date'] < _PHASE2_DATE_NULL:
             continue
         if _trial['assay'] is None:
             continue

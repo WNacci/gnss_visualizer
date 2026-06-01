@@ -367,6 +367,7 @@ def _(
         }
 
     _TEST_CONFIGS = {"A", "B", "C", "D"}
+    _PHASE2_DATE = "2026-02-17"
     _WINDOW_S = 60
     _RADIUS = 0.5
     _WIN_MIN = _WINDOW_S / 60.0
@@ -378,6 +379,8 @@ def _(
     _rows_xt = []
     for _tidx, _trial in enumerate(TRIALS):
         if _trial.get('config') not in _TEST_CONFIGS:
+            continue
+        if _trial.get('date', '') < _PHASE2_DATE:
             continue
         _tracks = load_trial_tracks(_trial, tracks_cache=TRACKS_CACHE, apply_orient=True)
         if not _tracks:
@@ -517,6 +520,7 @@ def _(
         }
 
     _CTRL_CONFIGS = {"CTRL_FAR", "CTRL_BARN"}
+    _PHASE2_DATE_B = "2026-02-17"
     _WINDOW_S_B = 60
     _WIN_MIN_B = _WINDOW_S_B / 60.0
     _rng_b = np.random.default_rng(seed=42)
@@ -528,6 +532,8 @@ def _(
     _rows_b = []
     for _tidx_b, _trial_b in enumerate(TRIALS):
         if _trial_b.get('config') not in _CTRL_CONFIGS:
+            continue
+        if _trial_b.get('date', '') < _PHASE2_DATE_B:
             continue
         _tracks_b = load_trial_tracks(_trial_b, tracks_cache=TRACKS_CACHE, apply_orient=True)
         if not _tracks_b:

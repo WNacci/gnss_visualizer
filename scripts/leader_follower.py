@@ -416,6 +416,7 @@ def _(
 ):
     """Compute leadership and recruitment entropy for every multi-sheep test trial."""
     _TEST_CONFIGS = {'A', 'B', 'C', 'D', 'CTRL_FAR', 'CTRL_BARN'}
+    _PHASE2_DATE = "2026-02-17"
     _rdf_agg = pd.read_csv(DATA_DIR / "fitted_reward_sites.csv")
     _records = []
 
@@ -423,6 +424,8 @@ def _(
         if _trial['group_size'] < 2:
             continue
         if _trial['config'] not in _TEST_CONFIGS:
+            continue
+        if _trial['date'] < _PHASE2_DATE:
             continue
 
         _tracks = load_trial_tracks(
@@ -581,6 +584,7 @@ def _(
     from scipy.stats import binomtest, chisquare
 
     _TEST_CONFIGS = {'A', 'B', 'C', 'D', 'CTRL_FAR', 'CTRL_BARN'}
+    _PHASE2_DATE = "2026-02-17"
     _N_PERMS = 2000
     _ALPHA = 0.05
     _RNG = np.random.default_rng(0)
@@ -591,6 +595,8 @@ def _(
         if _trial['group_size'] < 2:
             continue
         if _trial['config'] not in _TEST_CONFIGS:
+            continue
+        if _trial['date'] < _PHASE2_DATE:
             continue
 
         _tracks = load_trial_tracks(
@@ -819,6 +825,7 @@ def _(mo):
 @app.cell(hide_code=True)
 def _(TRIALS, TRACKS_CACHE, load_trial_tracks, np, pd):
     _TEST_CONFIGS = {'A', 'B', 'C', 'D', 'CTRL_FAR', 'CTRL_BARN'}
+    _PHASE2_DATE = "2026-02-17"
     _ACF_MAX_LAG_S = 60
     _DT = 1.0 / 60.0  # minutes per frame (1 s ticks)
 
@@ -829,6 +836,8 @@ def _(TRIALS, TRACKS_CACHE, load_trial_tracks, np, pd):
 
     for _tidx, _trial in enumerate(TRIALS):
         if _trial['group_size'] < 2 or _trial['config'] not in _TEST_CONFIGS:
+            continue
+        if _trial['date'] < _PHASE2_DATE:
             continue
         _tracks = load_trial_tracks(
             _trial, tracks_cache=TRACKS_CACHE, apply_orient=True,
@@ -983,6 +992,7 @@ def _(mo):
 @app.cell(hide_code=True)
 def _(TRIALS, TRACKS_CACHE, load_trial_tracks, np, pd):
     _TEST_CONFIGS = {'A', 'B', 'C', 'D', 'CTRL_FAR', 'CTRL_BARN'}
+    _PHASE2_DATE = "2026-02-17"
     _DT = 1.0 / 60.0
     _LAG_MAX = 30  # seconds
     _MIN_SHIFT = 300  # 5 min, in 1-s frames
@@ -1018,6 +1028,8 @@ def _(TRIALS, TRACKS_CACHE, load_trial_tracks, np, pd):
 
     for _tidx, _trial in enumerate(TRIALS):
         if _trial['group_size'] < 2 or _trial['config'] not in _TEST_CONFIGS:
+            continue
+        if _trial['date'] < _PHASE2_DATE:
             continue
         _tracks = load_trial_tracks(
             _trial, tracks_cache=TRACKS_CACHE, apply_orient=True,
@@ -1182,6 +1194,7 @@ def _(mo):
 @app.cell(hide_code=True)
 def _(TRIALS, TRACKS_CACHE, load_trial_tracks, np, pd):
     _TEST_CONFIGS = {'A', 'B', 'C', 'D', 'CTRL_FAR', 'CTRL_BARN'}
+    _PHASE2_DATE = "2026-02-17"
     _N_PERMUTATIONS = 2000
     _rng = np.random.default_rng(seed=42)
     _DT = 1.0 / 60.0
@@ -1191,6 +1204,8 @@ def _(TRIALS, TRACKS_CACHE, load_trial_tracks, np, pd):
     _per_trial_lf = []  # rows: group_num, assay group, sheep, lf
     for _trial in TRIALS:
         if _trial['group_size'] < 2 or _trial['config'] not in _TEST_CONFIGS:
+            continue
+        if _trial['date'] < _PHASE2_DATE:
             continue
         _tracks = load_trial_tracks(
             _trial, tracks_cache=TRACKS_CACHE, apply_orient=True,
@@ -1425,6 +1440,7 @@ def _(mo):
 def _(TRIALS, TRACKS_CACHE, load_trial_tracks, detect_site_visits,
       DATA_DIR, np, pd):
     _TEST_CONFIGS = {'A', 'B', 'C', 'D', 'CTRL_FAR', 'CTRL_BARN'}
+    _PHASE2_DATE = "2026-02-17"
     _N_PERMUTATIONS = 2000
     _rng = np.random.default_rng(seed=42)
     _DT = 1.0 / 60.0
@@ -1447,6 +1463,8 @@ def _(TRIALS, TRACKS_CACHE, load_trial_tracks, detect_site_visits,
 
     for _tidx, _trial in enumerate(TRIALS):
         if _trial['group_size'] < 2 or _trial['config'] not in _TEST_CONFIGS:
+            continue
+        if _trial['date'] < _PHASE2_DATE:
             continue
         _tracks = load_trial_tracks(
             _trial, tracks_cache=TRACKS_CACHE, apply_orient=True,

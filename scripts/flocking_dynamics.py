@@ -160,7 +160,7 @@ def _(TRIALS, mo):
     )
     phase_filter = mo.ui.dropdown(
         options=["Both phases", "Phase 1 only (pre Feb 17)", "Phase 2 only (Feb 17+)"],
-        value="Both phases",
+        value="Phase 2 only (Feb 17+)",
         label="Study phase",
     )
     aggregateby_widget = mo.ui.radio(

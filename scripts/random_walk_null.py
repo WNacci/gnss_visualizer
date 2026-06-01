@@ -59,7 +59,7 @@ def _(mo, K_DEFAULT):
     )
     phase_dd = mo.ui.dropdown(
         options=["All trials", "Phase 2 (>=2026-02-17)"],
-        value="All trials",
+        value="Phase 2 (>=2026-02-17)",
         label="Trial phase",
     )
     time_window_slider = mo.ui.range_slider(
