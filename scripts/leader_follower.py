@@ -803,5 +803,166 @@ def _(
     return
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(
+        "---\n"
+        "## Continuous leadership score (cosine projection)\n\n"
+        "For every sheep at every timestep, project the sheep velocity onto "
+        "the centroid velocity. Score = cos(θ) ∈ [−1, 1]. Reports per-sheep "
+        "mean / std, autocorrelation up to 60 s lag, and persistence time "
+        "(lag at which ACF drops below 1/e)."
+    )
+    return
+
+
+@app.cell(hide_code=True)
+def _(TRIALS, TRACKS_CACHE, load_trial_tracks, np, pd):
+    _TEST_CONFIGS = {'A', 'B', 'C', 'D', 'CTRL_FAR', 'CTRL_BARN'}
+    _ACF_MAX_LAG_S = 60
+    _DT = 1.0 / 60.0  # minutes per frame (1 s ticks)
+
+    _per_sheep = []
+    _acf_traces = {}
+    _ts_traces = {}
+    _rep_trial = None
+
+    for _tidx, _trial in enumerate(TRIALS):
+        if _trial['group_size'] < 2 or _trial['config'] not in _TEST_CONFIGS:
+            continue
+        _tracks = load_trial_tracks(
+            _trial, tracks_cache=TRACKS_CACHE, apply_orient=True,
+        )
+        if len(_tracks) < 2:
+            continue
+
+        _sids = sorted(_tracks.keys())
+        _n = len(_sids)
+        _dur = _trial['duration_min']
+        _t = np.arange(0, _dur + _DT, _DT)
+        _gx = np.zeros((_n, len(_t)))
+        _gy = np.zeros((_n, len(_t)))
+        for _ci, _sid in enumerate(_sids):
+            _trk = _tracks[_sid]
+            _o = np.argsort(_trk['t'])
+            _gx[_ci] = np.interp(_t, _trk['t'][_o], _trk['gx'][_o])
+            _gy[_ci] = np.interp(_t, _trk['t'][_o], _trk['gy'][_o])
+
+        _cx = _gx.mean(axis=0)
+        _cy = _gy.mean(axis=0)
+        _kernel = np.ones(15) / 15
+        _vcx = np.convolve(np.gradient(_cx, _t), _kernel, mode='same')
+        _vcy = np.convolve(np.gradient(_cy, _t), _kernel, mode='same')
+        _vc_mag = np.sqrt(_vcx**2 + _vcy**2)
+
+        _trial_ts = {}
+        for _ci, _sid in enumerate(_sids):
+            _vsx = np.convolve(np.gradient(_gx[_ci], _t), _kernel, mode='same')
+            _vsy = np.convolve(np.gradient(_gy[_ci], _t), _kernel, mode='same')
+            _vs_mag = np.sqrt(_vsx**2 + _vsy**2)
+            _denom = _vs_mag * _vc_mag
+            _cos = np.where(
+                _denom > 1e-9,
+                (_vsx * _vcx + _vsy * _vcy) / np.maximum(_denom, 1e-9),
+                0.0,
+            )
+            _moving = _vc_mag > 0.02
+            _cos_m = _cos[_moving]
+            if len(_cos_m) < 30:
+                continue
+
+            _x = _cos_m - _cos_m.mean()
+            _var = (_x * _x).mean() + 1e-12
+            _acf = np.array([
+                (_x[:-_k] * _x[_k:]).mean() / _var if _k > 0 else 1.0
+                for _k in range(_ACF_MAX_LAG_S + 1)
+            ])
+            _below = np.where(_acf < np.exp(-1))[0]
+            _persist = float(_below[0]) if len(_below) else float(_ACF_MAX_LAG_S)
+
+            _per_sheep.append({
+                'Trial': _tidx,
+                'Date': _trial['date'],
+                'Config': _trial['config'],
+                'Assay group': 'CTRL' if _trial['config'].startswith('CTRL') else str(_trial['assay']),
+                'Sheep': _sid,
+                'Mean cos': float(_cos_m.mean()),
+                'Std cos': float(_cos_m.std()),
+                'Persistence (s)': _persist,
+            })
+            _acf_traces[(_tidx, _sid)] = _acf
+            _trial_ts[_sid] = (_t.copy(), _cos.copy())
+
+        _ts_traces[_tidx] = _trial_ts
+        if _rep_trial is None and len(_trial_ts) >= 2:
+            _rep_trial = _tidx
+
+    cos_df = pd.DataFrame(_per_sheep)
+    acf_traces = _acf_traces
+    ts_traces = _ts_traces
+    rep_trial = _rep_trial
+    return cos_df, acf_traces, ts_traces, rep_trial
+
+
+@app.cell(hide_code=True)
+def _(cos_df, acf_traces, ts_traces, rep_trial, mo, np, plt):
+    _fig, _axes = plt.subplots(2, 2, figsize=(13, 9))
+    _axA, _axB, _axC, _axD = _axes.ravel()
+
+    # A: representative trial time series
+    if rep_trial is not None and rep_trial in ts_traces:
+        for _sid, (_t, _cos) in ts_traces[rep_trial].items():
+            _axA.plot(_t, _cos, lw=0.6, alpha=0.7, label=f"S{_sid}")
+        _axA.axhline(0, color='k', lw=0.4)
+        _axA.set_xlabel('Time (min)')
+        _axA.set_ylabel('cos(θ)')
+        _axA.set_title(f'Per-sheep alignment, trial {rep_trial}')
+        _axA.legend(fontsize=7, ncol=2)
+
+    # B: ACF overlay
+    for _acf in acf_traces.values():
+        _axB.plot(np.arange(len(_acf)), _acf, lw=0.4, alpha=0.3, color='#3B7DD8')
+    _axB.axhline(np.exp(-1), color='red', ls='--', lw=0.8, label='1/e')
+    _axB.set_xlabel('Lag (s)')
+    _axB.set_ylabel('ACF')
+    _axB.set_title('Sheep-level alignment ACF')
+    _axB.legend(fontsize=8)
+
+    _assays = sorted(
+        [a for a in cos_df['Assay group'].unique() if a != 'CTRL'],
+        key=lambda x: (not x.isdigit(), x),
+    )
+    if (cos_df['Assay group'] == 'CTRL').any():
+        _assays.append('CTRL')
+
+    _by_a = [cos_df[cos_df['Assay group'] == _a]['Persistence (s)'].values
+             for _a in _assays]
+    _axC.boxplot(_by_a, tick_labels=_assays, widths=0.5)
+    _axC.set_xlabel('Assay group')
+    _axC.set_ylabel('Persistence (s)')
+    _axC.set_title('Leadership persistence time')
+
+    _by_m = [cos_df[cos_df['Assay group'] == _a]['Mean cos'].values for _a in _assays]
+    _axD.boxplot(_by_m, tick_labels=_assays, widths=0.5)
+    _axD.axhline(0, color='k', lw=0.4)
+    _axD.set_xlabel('Assay group')
+    _axD.set_ylabel('Mean cos(θ)')
+    _axD.set_title('Mean alignment to centroid')
+
+    _fig.tight_layout()
+
+    _median_persist = float(cos_df['Persistence (s)'].median()) if len(cos_df) else float('nan')
+    _median_mean = float(cos_df['Mean cos'].median()) if len(cos_df) else float('nan')
+    mo.vstack([
+        _fig,
+        mo.md(
+            f"**{len(cos_df)} sheep-trials** included. "
+            f"Median persistence time: {_median_persist:.1f} s. "
+            f"Median mean cos(θ): {_median_mean:.3f}."
+        ),
+    ])
+    return
+
+
 if __name__ == "__main__":
     app.run()
