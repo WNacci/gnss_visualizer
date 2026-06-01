@@ -320,5 +320,153 @@ def _(
     return
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md("---\n## Cross-trial aggregation by assay (test configs A/B/C/D)")
+    return
+
+
+@app.cell(hide_code=True)
+def _(
+    TRIALS, TRACKS_CACHE, load_trial_tracks, detect_site_visits, DATA_DIR,
+    np, pd, plt, mo,
+):
+    """Cross-trial aggregation: collect all real discovery events from test trials."""
+    def _build_grid(tracks, dur):
+        t_common = np.arange(0, dur + 1 / 60, 1 / 60)
+        gx, gy = [], []
+        for _, trk in sorted(tracks.items()):
+            order = np.argsort(trk['t'])
+            gx.append(np.interp(t_common, trk['t'][order], trk['gx'][order]))
+            gy.append(np.interp(t_common, trk['t'][order], trk['gy'][order]))
+        return t_common, np.array(gx), np.array(gy)
+
+    def _speed_spread(gx_all, gy_all):
+        dt = 1 / 60.0
+        speed = np.sqrt(np.diff(gx_all, axis=1) ** 2 + np.diff(gy_all, axis=1) ** 2) / dt
+        speed = np.concatenate([speed, speed[:, -1:]], axis=1)
+        cx, cy = gx_all.mean(axis=0), gy_all.mean(axis=0)
+        return speed.mean(axis=0), np.sqrt((gx_all - cx) ** 2 + (gy_all - cy) ** 2).mean(axis=0)
+
+    def _before_after(mean_speed, spread, t_event, win_steps, n_t):
+        idx = int(t_event * 60)
+        lo = max(0, idx - win_steps)
+        hi = min(n_t, idx + win_steps)
+        if idx <= lo or hi <= idx:
+            return None
+        sb = float(mean_speed[lo:idx].mean())
+        sa = float(mean_speed[idx:hi].mean())
+        pb = float(spread[lo:idx].mean())
+        pa = float(spread[idx:hi].mean())
+        return {
+            'speed_before': sb, 'speed_after': sa,
+            'spread_before': pb, 'spread_after': pa,
+            'speed_pct': 100 * (sa - sb) / max(sb, 0.01),
+            'spread_pct': 100 * (pa - pb) / max(pb, 0.01),
+            't_event': float(t_event),
+        }
+
+    _TEST_CONFIGS = {"A", "B", "C", "D"}
+    _WINDOW_S = 60
+    _RADIUS = 0.5
+    _WIN_MIN = _WINDOW_S / 60.0
+    _N_BOOT = 1000
+    _rng = np.random.default_rng(seed=42)
+
+    _reward_sites_df = pd.read_csv(DATA_DIR / "fitted_reward_sites.csv")
+
+    _rows_xt = []
+    for _tidx, _trial in enumerate(TRIALS):
+        if _trial.get('config') not in _TEST_CONFIGS:
+            continue
+        _tracks = load_trial_tracks(_trial, tracks_cache=TRACKS_CACHE, apply_orient=True)
+        if not _tracks:
+            continue
+        _visits = detect_site_visits(
+            _tracks, _trial['field'], radius=_RADIUS, reward_sites_df=_reward_sites_df,
+        )
+        _first_visit_t = {
+            lbl: min(v[1] for v in vlist) for lbl, vlist in _visits.items() if vlist
+        }
+        if not _first_visit_t:
+            continue
+        _t_common, _gx, _gy = _build_grid(_tracks, _trial['duration_min'])
+        _mean_speed, _spread = _speed_spread(_gx, _gy)
+        _win_steps = max(1, int(_WIN_MIN * 60))
+        for _lbl, _t_disc in _first_visit_t.items():
+            _m = _before_after(_mean_speed, _spread, _t_disc, _win_steps, len(_t_common))
+            if _m is None:
+                continue
+            _rows_xt.append({
+                'trial_idx': _tidx,
+                'assay': _trial['assay'],
+                'config': _trial['config'],
+                'site_id': _lbl,
+                **_m,
+            })
+
+    events_df = pd.DataFrame(_rows_xt).dropna(
+        subset=['speed_pct', 'spread_pct']
+    ).reset_index(drop=True)
+
+    if events_df.empty:
+        mo.stop(True, mo.md("*No real discovery events found across test trials.*"))
+
+    _summary_rows = []
+    for _assay in sorted(events_df['assay'].unique(), key=lambda x: (x is None, str(x))):
+        _sub = events_df[events_df['assay'] == _assay]
+        if len(_sub) < 2:
+            continue
+        _sp = _sub['speed_pct'].to_numpy()
+        _sd = _sub['spread_pct'].to_numpy()
+        _n = len(_sp)
+        _idxs = _rng.integers(0, _n, size=(_N_BOOT, _n))
+        _sp_means = _sp[_idxs].mean(axis=1)
+        _sd_means = _sd[_idxs].mean(axis=1)
+        _summary_rows.append({
+            'assay': _assay,
+            'n_events': _n,
+            'speed_pct_mean': float(_sp.mean()),
+            'speed_pct_ci_lo': float(np.percentile(_sp_means, 2.5)),
+            'speed_pct_ci_hi': float(np.percentile(_sp_means, 97.5)),
+            'spread_pct_mean': float(_sd.mean()),
+            'spread_pct_ci_lo': float(np.percentile(_sd_means, 2.5)),
+            'spread_pct_ci_hi': float(np.percentile(_sd_means, 97.5)),
+        })
+    summary_df = pd.DataFrame(_summary_rows)
+
+    _fig_xt, (_ax_sp, _ax_pr) = plt.subplots(1, 2, figsize=(13, 5))
+    _assays_sorted = [r['assay'] for r in _summary_rows]
+    _sp_groups = [events_df[events_df['assay'] == a]['speed_pct'].to_numpy() for a in _assays_sorted]
+    _pr_groups = [events_df[events_df['assay'] == a]['spread_pct'].to_numpy() for a in _assays_sorted]
+    _labels = [str(a) for a in _assays_sorted]
+    _ax_sp.boxplot(_sp_groups, labels=_labels, showmeans=True)
+    _ax_sp.axhline(0, color='grey', lw=0.8, ls='--')
+    _ax_sp.set_title("Speed % change (after vs before discovery)")
+    _ax_sp.set_xlabel("Assay")
+    _ax_sp.set_ylabel("% change")
+    _ax_pr.boxplot(_pr_groups, labels=_labels, showmeans=True)
+    _ax_pr.axhline(0, color='grey', lw=0.8, ls='--')
+    _ax_pr.set_title("Spread % change (after vs before discovery)")
+    _ax_pr.set_xlabel("Assay")
+    _ax_pr.set_ylabel("% change")
+    _fig_xt.suptitle(
+        f"Cross-trial discovery effects — {len(events_df)} events, "
+        f"{events_df['trial_idx'].nunique()} test trials (configs A/B/C/D)",
+        fontsize=11,
+    )
+    _fig_xt.tight_layout()
+
+    print(f"[Cell A] events={len(events_df)} trials={events_df['trial_idx'].nunique()}")
+    print(summary_df.to_string(index=False))
+
+    mo.vstack([
+        _fig_xt,
+        mo.md("### Cross-trial summary by assay (bootstrap 95% CI, N=1000)"),
+        mo.ui.table(summary_df),
+        mo.md("### All real discovery events"),
+        mo.ui.table(events_df),
+    ])
+    return events_df, summary_df
 if __name__ == "__main__":
     app.run()
