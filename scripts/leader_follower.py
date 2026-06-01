@@ -415,7 +415,7 @@ def _(
     np, pd, plt,
 ):
     """Compute leadership and recruitment entropy for every multi-sheep test trial."""
-    _TEST_CONFIGS = {'A', 'B', 'C', 'D'}
+    _TEST_CONFIGS = {'A', 'B', 'C', 'D', 'CTRL_FAR', 'CTRL_BARN'}
     _rdf_agg = pd.read_csv(DATA_DIR / "fitted_reward_sites.csv")
     _records = []
 
@@ -494,6 +494,7 @@ def _(
             'Config': _trial['config'],
             'Group size': _trial['group_size'],
             'Assay': str(_trial['assay']),
+            'Assay group': 'CTRL' if _trial['config'].startswith('CTRL') else str(_trial['assay']),
             'Frontal entropy': round(_norm, 3),
             'Dominant leader frac.': round(float(_lf.max()), 3),
             'Recruitment entropy': round(_r_norm, 3),
@@ -507,29 +508,34 @@ def _(
     _agg_df = pd.DataFrame(_records)
 
     _fig2, (_ax1, _ax2, _ax3) = plt.subplots(1, 3, figsize=(15, 4))
-    _assays = sorted(_agg_df['Assay'].unique(), key=lambda x: (not x.isdigit(), x))
+    _assays = sorted(
+        [a for a in _agg_df['Assay group'].unique() if a != 'CTRL'],
+        key=lambda x: (not x.isdigit(), x),
+    )
+    if (_agg_df['Assay group'] == 'CTRL').any():
+        _assays.append('CTRL')
 
-    _ent_by_assay = [_agg_df[_agg_df['Assay'] == a]['Frontal entropy'].dropna().values
+    _ent_by_assay = [_agg_df[_agg_df['Assay group'] == a]['Frontal entropy'].dropna().values
                      for a in _assays]
-    _dom_by_assay = [_agg_df[_agg_df['Assay'] == a]['Dominant leader frac.'].dropna().values
+    _dom_by_assay = [_agg_df[_agg_df['Assay group'] == a]['Dominant leader frac.'].dropna().values
                      for a in _assays]
-    _rec_by_assay = [_agg_df[_agg_df['Assay'] == a]['Recruitment entropy'].dropna().values
+    _rec_by_assay = [_agg_df[_agg_df['Assay group'] == a]['Recruitment entropy'].dropna().values
                      for a in _assays]
 
     _ax1.boxplot(_ent_by_assay, labels=_assays)
-    _ax1.set_xlabel("Assay")
+    _ax1.set_xlabel("Assay group")
     _ax1.set_ylabel("Normalised entropy")
     _ax1.set_title("Frontal leadership entropy\n(low = one sheep leads)")
     _ax1.set_ylim(0, 1.05)
 
     _ax2.boxplot(_dom_by_assay, labels=_assays)
-    _ax2.set_xlabel("Assay")
+    _ax2.set_xlabel("Assay group")
     _ax2.set_ylabel("Dominant leader fraction")
     _ax2.set_title("Frontal: dominant sheep fraction")
     _ax2.set_ylim(0, 1.05)
 
     _ax3.boxplot(_rec_by_assay, labels=_assays)
-    _ax3.set_xlabel("Assay")
+    _ax3.set_xlabel("Assay group")
     _ax3.set_ylabel("Normalised entropy")
     _ax3.set_title("Recruitment entropy\n(low = one sheep always initiates)")
     _ax3.set_ylim(0, 1.05)
@@ -574,7 +580,7 @@ def _(
 ):
     from scipy.stats import binomtest, chisquare
 
-    _TEST_CONFIGS = {'A', 'B', 'C', 'D'}
+    _TEST_CONFIGS = {'A', 'B', 'C', 'D', 'CTRL_FAR', 'CTRL_BARN'}
     _N_PERMS = 2000
     _ALPHA = 0.05
     _RNG = np.random.default_rng(0)
@@ -671,6 +677,7 @@ def _(
             'Date': _trial['date'],
             'Config': _trial['config'],
             'Assay': str(_trial['assay']),
+            'Assay group': 'CTRL' if _trial['config'].startswith('CTRL') else str(_trial['assay']),
             'n': _n,
             'T (frames)': _T,
             'R (runs)': _R,
@@ -688,7 +695,12 @@ def _(
         mo.stop(True, mo.md("*No multi-sheep test trials found.*"))
 
     _bdf = pd.DataFrame(_rows)
-    _assays = sorted(_bdf['Assay'].unique(), key=lambda x: (not x.isdigit(), x))
+    _assays = sorted(
+        [a for a in _bdf['Assay group'].unique() if a != 'CTRL'],
+        key=lambda x: (not x.isdigit(), x),
+    )
+    if (_bdf['Assay group'] == 'CTRL').any():
+        _assays.append('CTRL')
 
     _fig3, _axes3 = plt.subplots(1, 3, figsize=(15, 4.2))
     _axA, _axB, _axC = _axes3
@@ -697,7 +709,7 @@ def _(
 
     # A: empirical p-value per trial, log-scaled
     for _ai, _a in enumerate(_assays):
-        _sub = _bdf[_bdf['Assay'] == _a]
+        _sub = _bdf[_bdf['Assay group'] == _a]
         _y = np.clip(_sub['Block-perm p (chi²)'].values, _floor, 1.0)
         _x = _ai + _jitter_rng.uniform(-0.15, 0.15, size=len(_y))
         _axA.scatter(_x, _y, s=30, alpha=0.75, color='#3B7DD8',
@@ -706,14 +718,14 @@ def _(
     _axA.set_yscale('log')
     _axA.set_xticks(range(len(_assays)))
     _axA.set_xticklabels(_assays)
-    _axA.set_xlabel('Assay')
+    _axA.set_xlabel('Assay group')
     _axA.set_ylabel('Block-perm p (chi²)')
     _axA.set_title('Empirical p-value vs. "all-equal" null')
     _axA.legend(fontsize=8)
 
     # B: observed max-leader fraction vs. null 97.5% bound
-    _obs_by_a = [_bdf[_bdf['Assay'] == _a]['Max leader frac.'].values for _a in _assays]
-    _null_by_a = [_bdf[_bdf['Assay'] == _a]['Null max 97.5%'].values for _a in _assays]
+    _obs_by_a = [_bdf[_bdf['Assay group'] == _a]['Max leader frac.'].values for _a in _assays]
+    _null_by_a = [_bdf[_bdf['Assay group'] == _a]['Null max 97.5%'].values for _a in _assays]
     _axB.boxplot(
         _obs_by_a, labels=_assays, widths=0.5, patch_artist=True,
         boxprops=dict(facecolor='#3B7DD840', edgecolor='#3B7DD8'),
@@ -723,7 +735,7 @@ def _(
     _axB.plot(range(1, len(_assays) + 1), _null_med, 'r--', lw=1.2,
               marker='_', markersize=10,
               label='Null 97.5% (median per assay)')
-    _axB.set_xlabel('Assay')
+    _axB.set_xlabel('Assay group')
     _axB.set_ylabel('Max leader fraction')
     _axB.set_title('Observed dominance vs. null upper bound')
     _axB.set_ylim(0, 1.05)
@@ -733,7 +745,7 @@ def _(
     _frac_reject = []
     _n_trials = []
     for _a in _assays:
-        _sub = _bdf[_bdf['Assay'] == _a]
+        _sub = _bdf[_bdf['Assay group'] == _a]
         _frac_reject.append(float(_sub['Reject H₀'].mean()) if len(_sub) else 0.0)
         _n_trials.append(int(len(_sub)))
     _axC.bar(range(len(_assays)), _frac_reject, color='#E8823A',
@@ -745,7 +757,7 @@ def _(
                   fontsize=8, color='#444')
     _axC.set_xticks(range(len(_assays)))
     _axC.set_xticklabels(_assays)
-    _axC.set_xlabel('Assay')
+    _axC.set_xlabel('Assay group')
     _axC.set_ylabel('Fraction of trials rejecting H₀')
     _axC.set_title('"Consistent leader" rate (numbers = n trials)')
     _axC.set_ylim(0, 1.05)
@@ -756,11 +768,11 @@ def _(
 
     _pooled_rows = []
     for _a in _assays:
-        _sub = _bdf[_bdf['Assay'] == _a]
+        _sub = _bdf[_bdf['Assay group'] == _a]
         if not len(_sub):
             continue
         _pooled_rows.append({
-            'Assay': _a,
+            'Assay group': _a,
             'n trials': int(len(_sub)),
             'Median max frac.': round(float(_sub['Max leader frac.'].median()), 3),
             'Median null max 97.5%': round(float(_sub['Null max 97.5%'].median()), 3),
