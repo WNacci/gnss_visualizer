@@ -449,5 +449,106 @@ def _(
     return
 
 
+# ---------------------------------------------------------------------------
+# Rigour pass: controls, time-reverse, and assay-shuffle nulls
+# ---------------------------------------------------------------------------
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ## Rigour pass: controls, time-reverse, and assay-shuffle nulls
+
+    Three diagnostic cells follow:
+
+    1. **Controls-aware aggregated panel** — surfaces `CTRL_FAR` and
+       `CTRL_BARN` alongside the test configs (A/B/C/D) so we can read off
+       any baseline differences in cohesion that have nothing to do with
+       the reward-site manipulation.
+    2. **Time-reverse null** — because `mean(NND)` and `mean(spread)` are
+       trivially invariant under track reversal (they depend only on the
+       per-timestep position *set*), we instead compute a temporal-asymmetry
+       contrast `Δ = mean(metric_last_third) − mean(metric_first_third)`
+       and use reversal as a sanity check (it flips the sign of `Δ`).
+    3. **Assay-shuffle null** — non-parametric significance for the
+       monotonic trend of cohesion with assay number, shuffling assay
+       labels within each `group_num` (preserves group identity).
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(TRIALS, COHESION, np, pd, plt, mo):
+    """Aggregated panel including CTRL_FAR / CTRL_BARN alongside test configs."""
+
+    _CONFIG_KEEP = {"A", "B", "C", "D", "CTRL_FAR", "CTRL_BARN"}
+    _TEST_CONFIGS = {"A", "B", "C", "D"}
+
+    _records = []
+    for _tidx, _trial in enumerate(TRIALS):
+        if _trial["group_size"] < 2 or _tidx not in COHESION:
+            continue
+        if _trial["config"] not in _CONFIG_KEEP:
+            continue
+        _c = COHESION[_tidx]
+        _records.append({
+            "Trial": _tidx,
+            "Date": _trial["date"],
+            "Config": _trial["config"],
+            "Kind": "TEST" if _trial["config"] in _TEST_CONFIGS else "CTRL",
+            "Group size": _trial["group_size"],
+            "Assay": str(_trial["assay"]),
+            "Mean NND (m)": round(_c["mean_nnd_scalar"], 2),
+            "Mean spread (m)": round(_c["mean_spread_scalar"], 2),
+        })
+
+    if not _records:
+        mo.stop(True, mo.md("*No trials match the controls-aware filter.*"))
+
+    _df = pd.DataFrame(_records)
+
+    # Ordered column layout: tests first, then controls
+    _ordered_configs = [c for c in ["A", "B", "C", "D", "CTRL_FAR", "CTRL_BARN"]
+                        if c in _df["Config"].unique()]
+    _split_idx = sum(1 for c in _ordered_configs if c in _TEST_CONFIGS)
+
+    _fig, (_ax1, _ax2) = plt.subplots(1, 2, figsize=(13, 4.5))
+
+    def _draw(ax, col, ylabel, title):
+        _data = [_df[_df["Config"] == c][col].dropna().values for c in _ordered_configs]
+        _bp = ax.boxplot(_data, labels=_ordered_configs, patch_artist=True)
+        for _i, _patch in enumerate(_bp["boxes"]):
+            _patch.set_facecolor("#a6cee3" if _i < _split_idx else "#fdbf6f")
+            _patch.set_alpha(0.75)
+        if 0 < _split_idx < len(_ordered_configs):
+            ax.axvline(_split_idx + 0.5, color="0.4", lw=1, ls="--")
+            _ymax = ax.get_ylim()[1]
+            ax.text(_split_idx / 2 + 0.5, _ymax * 0.97, "TEST",
+                    ha="center", va="top", fontsize=9, color="#1f78b4")
+            ax.text(_split_idx + (len(_ordered_configs) - _split_idx) / 2 + 0.5,
+                    _ymax * 0.97, "CTRL",
+                    ha="center", va="top", fontsize=9, color="#ff7f00")
+        ax.set_xlabel("Config")
+        ax.set_ylabel(ylabel)
+        ax.set_title(title)
+        ax.set_ylim(bottom=0)
+
+    _draw(_ax1, "Mean NND (m)", "Mean NND (m)", "Nearest-neighbour distance by config")
+    _draw(_ax2, "Mean spread (m)", "Mean spread (m)", "Group spread by config")
+    _fig.suptitle(
+        f"Cohesion: TEST (A/B/C/D) vs CTRL configs  "
+        f"({len(_df)} trials, {(_df['Kind']=='CTRL').sum()} controls)",
+        fontsize=11,
+    )
+    _fig.tight_layout()
+
+    mo.vstack([
+        _fig,
+        mo.md("### Per-trial cohesion (controls-aware)"),
+        mo.ui.table(_df.sort_values(["Kind", "Config", "Date"]).reset_index(drop=True)),
+    ])
+    return
+
+
 if __name__ == "__main__":
     app.run()
