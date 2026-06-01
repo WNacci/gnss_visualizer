@@ -120,5 +120,109 @@ def _(np):
     return (fit_movement_stats,)
 
 
+@app.cell(hide_code=True)
+def _(np, ARENA_LO, ARENA_HI):
+    def simulate_walk(start_xy, n_steps, steps_emp, turns_emp, rng):
+        """Correlated random walk with reflective boundary on [ARENA_LO, ARENA_HI]^2.
+
+        Parameters
+        ----------
+        start_xy : tuple (x0, y0).
+        n_steps : int, number of segments to simulate (returns n_steps+1 samples).
+        steps_emp : ndarray of empirical step lengths to resample from.
+        turns_emp : ndarray of empirical turn angles to resample from.
+        rng : numpy Generator.
+        """
+        if len(steps_emp) == 0 or n_steps <= 0:
+            x0, y0 = start_xy
+            return np.array([x0], dtype=float), np.array([y0], dtype=float)
+
+        if len(turns_emp) == 0:
+            turns_emp = np.array([0.0])
+
+        gx = np.empty(n_steps + 1, dtype=float)
+        gy = np.empty(n_steps + 1, dtype=float)
+        gx[0], gy[0] = start_xy
+
+        sampled_steps = rng.choice(steps_emp, size=n_steps)
+        sampled_turns = rng.choice(turns_emp, size=n_steps)
+        heading = rng.uniform(-np.pi, np.pi)
+
+        for i in range(n_steps):
+            heading = heading + sampled_turns[i]
+            step = sampled_steps[i]
+            x = gx[i] + step * np.cos(heading)
+            y = gy[i] + step * np.sin(heading)
+
+            # One-pass reflective fold (typical step << arena width)
+            if x < ARENA_LO:
+                x = 2 * ARENA_LO - x
+                heading = np.pi - heading
+            elif x > ARENA_HI:
+                x = 2 * ARENA_HI - x
+                heading = np.pi - heading
+            if y < ARENA_LO:
+                y = 2 * ARENA_LO - y
+                heading = -heading
+            elif y > ARENA_HI:
+                y = 2 * ARENA_HI - y
+                heading = -heading
+
+            # Clamp in the rare event of a step > arena width
+            x = min(max(x, ARENA_LO), ARENA_HI)
+            y = min(max(y, ARENA_LO), ARENA_HI)
+            gx[i + 1] = x
+            gy[i + 1] = y
+
+        return gx, gy
+    return (simulate_walk,)
+
+
+@app.cell(hide_code=True)
+def _(np, ARENA_LO, ARENA_HI, COVERAGE_BIN, SITE_GRID, SITE_RADIUS):
+    _N_BINS = int(round((ARENA_HI - ARENA_LO) / COVERAGE_BIN))
+
+    def coverage(gx, gy):
+        """Count of unique 0.1-unit cells visited."""
+        if len(gx) == 0:
+            return 0
+        ix = np.clip(((gx - ARENA_LO) / COVERAGE_BIN).astype(int), 0, _N_BINS - 1)
+        iy = np.clip(((gy - ARENA_LO) / COVERAGE_BIN).astype(int), 0, _N_BINS - 1)
+        return int(np.unique(ix * _N_BINS + iy).size)
+
+    def revisit_rate(gx, gy):
+        """Samples per unique visited cell."""
+        c = coverage(gx, gy)
+        return float(len(gx)) / float(max(c, 1))
+
+    def straightness(gx, gy):
+        if len(gx) < 2:
+            return 0.0
+        d = float(np.hypot(gx[-1] - gx[0], gy[-1] - gy[0]))
+        path = float(np.sum(np.hypot(np.diff(gx), np.diff(gy))))
+        return d / path if path > 0 else 0.0
+
+    def sites_found_by_time(gx, gy, t, sites=SITE_GRID, radius=SITE_RADIUS):
+        """First-visit times (minutes) for each canonical reward site.
+
+        Mirrors detect_site_visits semantics (distance <= radius), but
+        per-sheep and without dwell filtering — used for cumulative
+        discovery curves.
+        """
+        gx = np.asarray(gx, dtype=float)
+        gy = np.asarray(gy, dtype=float)
+        t = np.asarray(t, dtype=float)
+        first_times = []
+        for _label, (sx, sy) in sites.items():
+            dist = np.sqrt((gx - sx) ** 2 + (gy - sy) ** 2)
+            inside = dist <= radius
+            if inside.any():
+                idx = int(np.argmax(inside))
+                first_times.append(float(t[idx]))
+        first_times.sort()
+        return first_times
+    return coverage, revisit_rate, straightness, sites_found_by_time
+
+
 if __name__ == "__main__":
     app.run()
