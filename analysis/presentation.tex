@@ -49,7 +49,7 @@
 % ===========================================================================
 \section{Study Design}
 
-\begin{frame}{Study overview}
+\begin{frame}[shrink=5]{Study overview}
 \begin{columns}[T]
 \begin{column}{0.54\textwidth}
 \textbf{Question.} Do groups of sheep learn to locate baited reward
@@ -57,11 +57,13 @@ sites, and how does collective search efficiency change with experience?
 
 \vspace{0.3em}
 \begin{itemize}\setlength\itemsep{0.12em}
-    \item 96 Phase~2 test trials (12 groups, 9 days)
-    \item Assay 0 (unbaited) $\rightarrow$ assay 7 (experienced)
-    \item Groups of 1--8 sheep, 35-min trials, first 25\,min analysed
-    \item 10\,Hz dual-device GNSS; Kalman + RTS smoothed
-    \item 50\,m $\times$ 50\,m arena: 12 sites, \textbf{3 baited} (A1--A3)
+    \item Phase~2: 13 groups $\times$ up to 8 assays, groups of 4 sheep
+    \item Assay 0 (no baited sites) $\rightarrow$ assay 7 (experienced)
+    \item 35-min trials; 10\,Hz dual-device GNSS, Kalman + RTS smoothed
+    \item 50\,m $\times$ 50\,m arena: 12 sites on a $4{\times}3$ grid
+    \item \textbf{4 test configs (A--D):} each baits a fixed triplet of 3 sites
+    \item \textbf{2 control configs (CTRL\_FAR, CTRL\_BARN):} reward at
+          random site positions each trial --- no stable spatial learning possible
 \end{itemize}
 
 \vspace{0.2em}
@@ -104,8 +106,11 @@ sites, and how does collective search efficiency change with experience?
 \end{enumerate}
 
 \vspace{0.25em}
-\textbf{Statistics.} KW $H$-tests across assays; MWU pairwise;
-Spearman $\rho$ for trends. Medians and IQR reported.
+\textbf{Statistics.} Two-tier approach: (i) descriptive ---
+KW $H$-tests, MWU pairwise, Spearman $\rho$, medians and IQR;
+(ii) permutation nulls --- observed statistic vs.\ empirical null
+distribution (1000--2000 perms, \texttt{seed=42}), two-sided
+empirical $p$. All analyses restricted to Phase~2 data.
 Uncorrected for multiple comparisons (exploratory).
 
 \vspace{0.25em}
@@ -158,6 +163,8 @@ completion time and path length.
 \begin{itemize}\setlength\itemsep{0.05em}
     \item Median completion: 21.9\,min (assay~1) $\rightarrow$ 2.7\,min (assay~6): 8-fold reduction.
     \item Path falls 329\,m $\rightarrow$ 91\,m (3.6$\times$) --- directed search, not just faster movement.
+    \item Permutation null (assay-label shuffle within group): sites found $p=0.003$,
+          completion time $p=0.042$, path length $p=0.069$.
 \end{itemize}
 \end{frame}
 
@@ -327,8 +334,10 @@ completion time and path length.
 \vspace{0.05em}
 \small
 \begin{itemize}\setlength\itemsep{0.05em}
-    \item 60\,s windows before/after first visit. Baited: speed drops (exploitation).
-    \item Unbaited: minimal change. MWU and median $\Delta$ on plot.
+    \item 60\,s windows before/after first visit. \textbf{Baited sites (A1--A3):} speed drops (exploitation).
+    \item \textbf{Unbaited sites:} minimal change. MWU and median $\Delta$ on plot.
+    \item Permutation null (coin-flip swap): speed $\Delta=-2.1$\,m/min, $p\approx 0$; spread $\Delta=+3$\,cm, $p<0.05$ (n = 952 events, large-$n$ artefact).
+    \item Control placebo (random timestamps in CTRL trials): $\Delta \approx 0$ --- confirms slowing is specific to actual site encounters.
 \end{itemize}
 \end{frame}
 
@@ -345,29 +354,87 @@ completion time and path length.
 \end{frame}
 
 % ===========================================================================
+\section{Random-Walk Null Model}
+
+\begin{frame}{Do sheep navigate to reward, or just move randomly?}
+\begin{columns}[T]
+\begin{column}{0.55\textwidth}
+\textbf{Baited preference metric.}
+After canonical orientation all test configs share the same baited
+positions: $\{$A1, A2, A3$\}$.
+
+\vspace{0.3em}
+$\text{preference} = \dfrac{\text{time at baited sites}}{\text{time at baited} + \text{time at unbaited}}$
+
+\vspace{0.3em}
+Spatial chance $= 3/12 = 0.25$.
+Simulated baseline: $K=50$ correlated random walks per sheep with
+matched step/turn distributions, reflective boundary.
+
+\vspace{0.4em}
+\begin{tabular}{l c c}
+\toprule
+\textbf{Config} & \textbf{Real} & \textbf{Simulated} \\
+\midrule
+A & \textbf{0.53} & 0.25 \\
+B & \textbf{0.49} & 0.25 \\
+C & \textbf{0.58} & 0.25 \\
+D & \textbf{0.60} & 0.25 \\
+\midrule
+CTRL & 0.29 & 0.25 \\
+\bottomrule
+\end{tabular}
+\end{column}
+\begin{column}{0.42\textwidth}
+\vspace{0.8em}
+\begin{itemize}\setlength\itemsep{0.15em}
+    \item Test sheep spend $\sim$2$\times$ chance of site-dwell time
+          at the 3 baited sites.
+    \item CTRL sits at chance: reward positions change each trial,
+          so canonical positions accumulate no learned value.
+    \item Simulated random walkers recover 0.25 uniformly
+          (arena is unbiased under random movement).
+    \item General movement metrics (coverage, revisit rate,
+          straightness) also differ from null --- real sheep
+          cover \emph{less}, revisit \emph{more}, move more
+          directly --- consistent with spatial memory.
+\end{itemize}
+\end{column}
+\end{columns}
+\end{frame}
+
+% ===========================================================================
 \section{Summary}
 
-\begin{frame}{What this data shows}
+\begin{frame}[shrink=5]{What this data shows}
 \begin{columns}[T]
 \begin{column}{0.55\textwidth}
 \textbf{Groups of sheep learn to find baited reward sites rapidly.}
 By the third exposure, most groups locate all 3 baited sites within
 5 minutes. The improvement is driven by directed search (shorter,
-straighter paths), not simply faster movement.
+straighter paths), not simply faster movement (permutation null:
+sites found $p=0.003$, completion time $p=0.042$).
 
-\vspace{0.5em}
+\vspace{0.4em}
+\textbf{Spatial memory is specific to fixed reward locations.}
+A random-walk null shows test sheep spend $\sim$2$\times$ chance
+of site time at the 3 baited positions (0.49--0.60 vs.\ 0.25).
+Control sheep, whose reward positions change each trial, score
+0.29 $\approx$ chance --- confirming the effect requires stable
+locations to learn.
+
+\vspace{0.4em}
 \textbf{Search is collective but not fully egalitarian.}
-Groups maintain tight cohesion (NND $\sim$1\,m) throughout learning.
+Groups of 4 maintain tight cohesion (NND $\sim$1\,m) throughout.
 The top frontal leader holds $\sim$40--47\% of leading time
-(fair share = 25\%), and the top recruiter holds $\sim$50--55\% of
-followers, suggesting some individuals disproportionately initiate
-group visits.
+(fair share = 25\%), and the top recruiter holds $\sim$50--55\%
+of followers.
 
-\vspace{0.5em}
+\vspace{0.4em}
 \textbf{Sheep discriminate between sites.}
-Residence time at baited sites is 3$\times$ longer than at unbaited
-sites. Groups slow down at baited sites, consistent with a
-search-to-exploitation transition.
+Residence at baited sites is 3$\times$ longer than unbaited.
+Speed drops at baited site discovery ($\Delta=-2.1$\,m/min, $p\approx0$);
+control placebo windows show no such drop.
 \end{column}
 \begin{column}{0.42\textwidth}
 \centering
@@ -377,7 +444,6 @@ search-to-exploitation transition.
 \textbf{Assay} & \textbf{Compl.} & \textbf{Path} & \textbf{Sites} \\
  & \textbf{(min)} & \textbf{(m)} & \\
 \midrule
-0 & 30.9 & 512 & 7 \\
 1 & 21.9 & 329 & 10 \\
 2 & 7.3  & 120 & 10 \\
 3 & 3.4  & 107 & 10 \\
@@ -390,8 +456,8 @@ search-to-exploitation transition.
 
 \vspace{0.3em}
 \scriptsize Medians, successful trials only.\\
-Completion = all 3 baited sites ($\leq$\,2\,m).\\
-Sites = exploration count (5\,m).
+Assay~0 (no baited sites) excluded.\\
+Completion $\leq$\,2\,m; Sites at 5\,m radius.
 \end{column}
 \end{columns}
 \end{frame}
@@ -401,24 +467,36 @@ Sites = exploration count (5\,m).
 \begin{column}{0.48\textwidth}
 \textbf{Caveats}
 \begin{itemize}\setlength\itemsep{0.12em}
-    \item Same 12 groups across assays (pseudoreplication);
+    \item 13 groups across assays (pseudoreplication);
           mixed-effects models needed.
-    \item Pairwise tests uncorrected for multiple comparisons.
-    \item Group size (1--8) not controlled.
+    \item Permutation tests uncorrected for multiple comparisons
+          (exploratory; treat $p$-values as descriptive).
+    \item Phase~2 group size fixed at 4; no between-group-size
+          comparisons possible in this cohort.
     \item GPS accuracy $\sim$2\,m; Kalman + RTS smoothing reduces but
           does not eliminate jitter.
+    \item Per-trial CTRL baiting positions not yet in pipeline;
+          CTRL discovery events cannot be verified against reward locations.
 \end{itemize}
 \end{column}
 \begin{column}{0.48\textwidth}
+\textbf{Completed analyses}
+\begin{itemize}\setlength\itemsep{0.08em}
+    \item Permutation nulls for all main claims
+    \item Random-walk null + baited preference metric
+    \item Pairwise leader--follower cross-correlations
+    \item Leadership rank stability across assays
+    \item Leader--pioneer overlap
+\end{itemize}
+
+\vspace{0.3em}
 \textbf{Next steps}
-\begin{itemize}\setlength\itemsep{0.12em}
+\begin{itemize}\setlength\itemsep{0.08em}
     \item Route fidelity (DTW across trials).
     \item HMM behavioural state segmentation.
-    \item Time-lagged cross-correlations for
-          leader--follower networks (beyond recruitment metric).
-    \item Dual-device sensor fusion refinement.
-    \item Individual-level analysis: which sheep
-          drive group success?
+    \item Per-trial CTRL baiting maps $\to$ real CTRL
+          discovery events.
+    \item Mixed-effects models for pseudoreplication.
 \end{itemize}
 \end{column}
 \end{columns}
