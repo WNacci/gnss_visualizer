@@ -114,6 +114,21 @@ Shared permutation conventions are listed once at the end.
 
 ## 1. Occupancy (`scripts/occupancy_heatmap.py`)
 
+### Summary of operation
+
+The script opens with UI controls for date range, bin size, and
+config/phase filter (Phase 2 default). It loads all matching trials
+and builds per-sheep 2D occupancy histograms on a configurable grid.
+The main view shows individual-sheep heatmaps for a selected trial.
+Three additional analytical panels follow: (i) a Test vs Control
+side-by-side aggregate occupancy comparison; (ii) a sheep-ID-shuffle
+null that permutes sheep labels within each trial 1000 times, computes
+mean per-sheep Shannon entropy each time, and plots the null
+distribution against the observed value with a two-sided empirical p;
+(iii) a random-walk occupancy comparison that simulates K = 20
+correlated random walks per sheep and renders a three-panel
+real / simulated / difference heatmap.
+
 ### 1.1 Do individual sheep within a trial occupy distinct sub-regions?
 
 **Question.** Within a single trial, are different sheep statistically
@@ -155,6 +170,20 @@ descriptive — inferential per-scalar-metric tests live in §6.
 
 ## 2. Path length and discovery efficiency (`scripts/path_length_analysis.py`)
 
+### Summary of operation
+
+Loads all Phase 2 trials (test configs A/B/C/D plus CTRL_FAR/CTRL_BARN).
+For each trial, computes: total path length (cumulative Euclidean
+distance), completion time (first moment at which N = 3 distinct
+sites have been visited within radius 0.5), and total sites found.
+Renders boxplots of all three metrics by configuration, with test and
+control configurations visually distinguished. The inferential null
+restricts to test trials only (A/B/C/D): Spearman ρ is computed
+between assay number and each metric per trial, and assay labels are
+shuffled within each group_num across 1000 permutations (seed = 42)
+to build the null distribution. Two-sided empirical p is reported for
+each metric.
+
 ### 2.1 Do sheep find sites faster, with shorter paths, and more completely across assays?
 
 **Question.** Within each group, does completion time decrease, path-to-
@@ -179,6 +208,22 @@ sheep find sites better with assay but don't necessarily move less.
 ---
 
 ## 3. Flocking (`scripts/flocking_dynamics.py`)
+
+### Summary of operation
+
+Opens with a phase/date filter (Phase 2 default). For each trial,
+computes two cohesion metrics at every timestep: nearest-neighbour
+distance (NND, minimum pairwise Euclidean distance) and per-sheep
+spread from the group centroid (mean distance to centroid). Renders
+time-series plots per trial/config. Computes per-trial means and runs
+the assay-shuffle Spearman null (1000 perms within group_num, seed = 42)
+separately for NND and spread. A separate CTRL comparison panel shows
+boxplots of mean NND and spread for test vs. control configurations.
+The early-vs-late contrast cell computes Δ = mean(metric, last third)
+− mean(metric, first third) per trial, bootstraps the per-config mean
+Δ (1000 resamples, seed = 42), and reports 95% CIs. A time-reverse
+null overlays the symmetric forward/reverse scatter (points fall on
+y = −x by construction).
 
 ### 3.1 Does flock cohesion change with assay number?
 
@@ -214,6 +259,25 @@ a sanity check — points fall on `y = −x` by construction.
 ---
 
 ## 4. Leadership and influence (`scripts/leader_follower.py`)
+
+### Summary of operation
+
+Phase 2 filter applied (hardcoded `_PHASE2_DATE`). At each timestep,
+leadership is assigned to the sheep whose position vector has the
+highest projection onto the group centroid-velocity direction (frontal
+leader). Per-trial leader-fraction summaries are rendered as bar
+charts. Four null tiers test non-uniformity with increasing
+autocorrelation awareness (frame χ², run-level χ², per-sheep
+binomial, block-permutation — §4.1 reports tier 4). Four further
+analytical blocks follow: (a) continuous leadership — per-sheep
+cosine similarity to centroid velocity, ACF up to 60 s lag,
+persistence time τ; (b) pairwise directional influence — N×N
+cross-correlation matrix with circular-shift null (≥5 min rotation,
+2000 perms); (c) rank stability — Spearman ρ between per-sheep
+leadership fractions across assay pairs within each group, with
+sheep-ID shuffle null; (d) leader-vs-pioneer — per-trial Spearman ρ
+between leadership fraction rank and pioneer-visit rank, with
+per-trial pioneer-rank shuffle null (2000 perms).
 
 ### 4.1 Is frontal-position leadership uniform across the group?
 
@@ -298,6 +362,31 @@ across-trial mean ρ.
 
 ## 5. Site-discovery effects (`scripts/site_discovery_effects.py`)
 
+### Summary of operation
+
+Two modes. **Single-trial viewer** (interactive, no Phase 2 filter):
+user selects any trial; the script renders smooth site-occupancy
+probability curves for all 12 sites over time, with first-visit
+markers. This is exploratory — any trial may be selected.
+
+**Cross-trial aggregation** (Phase 2, A/B/C/D only): detects
+discovery events (dwell ≥ threshold within radius 0.5 of a site
+using `detect_site_visits()`); for each event collects 60 s of
+speed and group-spread before and after; pools events across all
+test trials. A paired coin-flip swap null (1000 perms, seed = 42)
+tests whether mean signed Δ = (after − before) is non-zero.
+Distribution visualisation renders before/after scatter and Δ
+histograms alongside the null band.
+
+**Control placebo baseline**: for each CTRL trial, K random
+timestamps are sampled from the empirical distribution of test
+discovery times (matching the within-trial time profile). The same
+60 s before/after window is applied at those timestamps. This
+answers: does a randomly chosen moment in a CTRL trial show the
+same Δ as a real discovery event in a test trial? If the Δ in CTRL
+is near zero, it confirms the slowing response is specific to actual
+site visits, not to any moment in the trial.
+
 ### 5.1 Do sheep change behaviour when they find a reward site?
 
 **Question.** Do speed and group spread change in the seconds
@@ -317,27 +406,52 @@ empirical p. *Result:* speed Δ = −2.13 m/min (p ≈ 0; sheep slow to
 eat at the site); spread Δ = +0.03 m (statistically significant only
 because n = 952 — effect is 3 cm, biologically negligible).
 
-### 5.2 Does the same effect appear in control trials?
+### 5.2 Does the slowing response reflect site-visit behaviour or generic trial dynamics?
 
-**Question.** Control sheep also encounter reward (at random positions
-each trial). Does the immediate slowing response occur at those
-discoveries too — and if so, what does that tell us?
+**Question.** Is the before/after Δ specific to moments when sheep
+actually visit a site, or would a randomly chosen moment in any trial
+show the same change?
 
-**Answer.** *H₀:* the slowing response is a general reward-consumption
-reflex, present regardless of whether reward positions are fixed or
-random. A non-zero Δ in CTRL would confirm this interpretation (sheep
-slow because they eat, not because they recognise a learned location).
-The spatial-learning signal is captured by the *preference* metric
-(§6.1), not by the magnitude of the immediate slowing.
+**Answer.** *H₀:* any moment in a trial produces the same Δ as a
+real discovery event — the slowing is driven by time-of-trial
+dynamics rather than site-visit behaviour. *Reject* if the observed
+Δ in test trials falls outside the distribution of Δ at randomly
+sampled timestamps in control trials.
 
-**Proof.** Detect discovery events in CTRL trials using the same dwell
-criterion. Compute before/after speed and spread Δ. Plot test vs
-control side-by-side. Currently descriptive — no formal inferential
-comparison between test and CTRL Δ magnitudes.
+**Proof.** Per CTRL trial, sample K placebo timestamps uniformly from
+the empirical distribution of test-trial discovery times (this matches
+the within-trial time profile of real events). Apply the same 60 s
+before/after window at each placebo time. Plot speed and spread %
+change for test (by assay) vs. CTRL placebo side-by-side. Currently
+descriptive — no formal inferential comparison. Note: because CTRL
+reward positions change each trial and per-trial CTRL baiting maps are
+not yet in the data pipeline, we use the placebo approach rather than
+detecting real CTRL discovery events.
 
 ---
 
 ## 6. Random-walk null model (`scripts/random_walk_null.py`)
+
+### Summary of operation
+
+Opens with UI controls for phase filter (Phase 2 default), trial time
+window (0–35 min), and K (number of simulated walks, default 50).
+Loads Phase 2 tracks; decimates from 10 Hz to 1 Hz for speed.
+Applies canonical orientation (`apply_orient=True`) so that each test
+config's baited triplet maps to {A1, A2, A3}. For each sheep-trial,
+fits empirical step-length and turn-angle distributions from the
+real 1 Hz track, then simulates K correlated random walks with a
+reflective boundary on the [0, 5]² arena grid.
+
+Two families of outputs follow. **General movement metrics** (coverage,
+revisit rate, straightness, time-at-any-site): per-sheep real values
+are compared to the K-walk distribution; a diagnostic table reports
+median z-score and two-sided empirical p grouped by configuration.
+**Baited preference** (test configs A/B/C/D only; CTRL excluded because
+it has no fixed canonical baited set): computes
+`baited_fraction = time_at_baited / (time_at_baited + time_at_unbaited)`
+for each sheep and for K simulated walks; renders per-config violin
+(sim) + scatter (real), pooled histogram, and summary table.
 
 The analyses below are grouped by *configuration* (A, B, C, D, CTRL) —
 not assay number. (An earlier version of this script labelled the
