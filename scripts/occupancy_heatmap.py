@@ -725,5 +725,466 @@ def _(
     _fig
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(
+        r"""
+        ---
+        ## Rigour pass: Test vs Control + sheep-ID shuffle null
+
+        Two additions independent of the UI filters above:
+
+        1. **Test vs Control occupancy panel** — pools all Phase 2 trials by whether
+           the configuration is a baited test (`A/B/C/D`) or a control
+           (`CTRL_FAR/CTRL_BARN`) and renders test, control, and (test − control)
+           occupancy on a shared grid.
+        2. **Sheep-ID-shuffle null** — tests whether sheep within a trial occupy
+           statistically distinct sub-regions, using mean per-sheep Shannon entropy
+           as the metric (see explanatory note in the null cell below).
+        """
+    )
+    return
+
+
+@app.cell(hide_code=True)
+def _(
+    TRIALS, ARENA_TRANSFORMS, GPS_CACHE,
+    np, pd,
+    find_matching_devices, latlon_to_grid, apply_orientation,
+):
+    """Build Test vs Control point pools across Phase 2, oriented per-config.
+
+    Independent of the UI filters above: enumerates ALL Phase 2 trials
+    (date >= 2026-02-17) with config in the test or control sets, projects
+    GPS to arena grid coords, applies per-configuration orientation,
+    averages multi-device sheep, and aggregates points per pool.
+    """
+    from gps_analysis import CONFIG_TRANSFORMS as _CONFIG_TRANSFORMS
+    from gps_analysis import DATA_DIR as _DATA_DIR
+
+    _PHASE2_DATE = "2026-02-17"
+    _TEST_SET = {"A", "B", "C", "D"}
+    _CTRL_SET = {"CTRL_FAR", "CTRL_BARN"}
+
+    def _in_arena_count_tc(lats, lons, field_key):
+        _gxc, _gyc = latlon_to_grid(lats, lons, ARENA_TRANSFORMS[field_key])
+        return int(np.sum((_gxc >= 0) & (_gxc <= 5) & (_gyc >= 0) & (_gyc <= 5)))
+
+    def _best_field_tc(lats, lons, csv_field):
+        _best, _best_n = csv_field, _in_arena_count_tc(lats, lons, csv_field)
+        for _f_try in ARENA_TRANSFORMS:
+            if _f_try == csv_field:
+                continue
+            _n = _in_arena_count_tc(lats, lons, _f_try)
+            if _n > _best_n:
+                _best_n, _best = _n, _f_try
+        return _best
+
+    def _project_trial(t):
+        """Return list of all_points-style dicts (one per sheep) for trial t, or []."""
+        _date = t["date"]
+        _day = int(_date.split("-")[2])
+        _raw = GPS_CACHE.get(str(_DATA_DIR / "gnss" / f"{_day}-02-26"), {})
+        if not _raw:
+            return []
+        _start_unix = (
+            pd.to_datetime(f"{_date} {t['start_time']}")
+            .tz_localize('Europe/Paris').tz_convert('UTC').timestamp()
+        )
+        _end_unix = _start_unix + t["duration_min"] * 60
+        _devices = find_matching_devices(t["devices"], list(_raw.keys()))
+        _d2s = t["device_to_sheep"]
+
+        _field = t["field"]
+        for _dev in _devices:
+            if _dev not in _raw:
+                continue
+            _lats_d, _lons_d, _times_d = _raw[_dev]
+            _mask_d = (_times_d >= _start_unix) & (_times_d <= _end_unix)
+            if _mask_d.sum() < 10:
+                continue
+            _field = _best_field_tc(_lats_d[_mask_d], _lons_d[_mask_d], t["field"])
+            break
+
+        _rot, _ref = _CONFIG_TRANSFORMS.get(t["config"], (0, "none"))
+
+        _sheep_tracks = {}
+        for _dev in _devices:
+            if _dev not in _raw:
+                continue
+            _lats_d, _lons_d, _times_d = _raw[_dev]
+            _mask_d = (_times_d >= _start_unix) & (_times_d <= _end_unix)
+            if _mask_d.sum() == 0:
+                continue
+            _t_rel = (_times_d[_mask_d] - _start_unix) / 60.0
+            _gx, _gy = latlon_to_grid(
+                _lats_d[_mask_d], _lons_d[_mask_d], ARENA_TRANSFORMS[_field],
+            )
+            _gx, _gy = apply_orientation(_gx, _gy, _rot, _ref)
+
+            _dev_parts = _dev.replace('GNSS-', '').replace('GNSS_', '')
+            try:
+                _dev_num = int(_dev_parts)
+            except ValueError:
+                _dev_num = None
+            _sheep_id = _d2s.get(_dev_num, 'Unknown') if _dev_num is not None else 'Unknown'
+            _sheep_tracks.setdefault(_sheep_id, []).append((_gx, _gy, _t_rel))
+
+        _out = []
+        for _sheep_id, _tracks in _sheep_tracks.items():
+            if len(_tracks) == 1:
+                _gx_f, _gy_f, _t_f = _tracks[0]
+            else:
+                _t_min = min(tt.min() for _, _, tt in _tracks)
+                _t_max = max(tt.max() for _, _, tt in _tracks)
+                _t_grid = np.arange(_t_min, _t_max + 1/600, 1/600)
+                _stacks_gx, _stacks_gy = [], []
+                for _gx_d, _gy_d, _t_d in _tracks:
+                    _order = np.argsort(_t_d)
+                    _stacks_gx.append(np.interp(_t_grid, _t_d[_order], _gx_d[_order]))
+                    _stacks_gy.append(np.interp(_t_grid, _t_d[_order], _gy_d[_order]))
+                _gx_f = np.mean(_stacks_gx, axis=0)
+                _gy_f = np.mean(_stacks_gy, axis=0)
+                _t_f = _t_grid
+            _out.append({
+                'gx': _gx_f, 'gy': _gy_f, 't_rel_min': _t_f,
+                'field': _field, 'config': t["config"],
+                'assay': t["assay"], 'group_size': t["group_size"],
+                'group_num': t["group_num"],
+                'sheep_id': _sheep_id, 'trial_idx': None, 'trial_name': t["name"],
+            })
+        return _out
+
+    test_points, ctrl_points = [], []
+    _n_test_trials = _n_ctrl_trials = 0
+    for _i, _t in enumerate(TRIALS):
+        if _t["date"] < _PHASE2_DATE:
+            continue
+        _cfg = _t["config"]
+        if _cfg in _TEST_SET:
+            _pts = _project_trial(_t)
+            if _pts:
+                for _p in _pts:
+                    _p['trial_idx'] = _i
+                test_points.extend(_pts)
+                _n_test_trials += 1
+        elif _cfg in _CTRL_SET:
+            _pts = _project_trial(_t)
+            if _pts:
+                for _p in _pts:
+                    _p['trial_idx'] = _i
+                ctrl_points.extend(_pts)
+                _n_ctrl_trials += 1
+
+    _n_test_pts = sum(len(p['gx']) for p in test_points)
+    _n_ctrl_pts = sum(len(p['gx']) for p in ctrl_points)
+    print(
+        f"Test pool: {_n_test_trials} trials, {_n_test_pts:,} pts | "
+        f"Control pool: {_n_ctrl_trials} trials, {_n_ctrl_pts:,} pts"
+    )
+    return (test_points, ctrl_points)
+
+
+@app.cell(hide_code=True)
+def _(
+    test_points, ctrl_points, reward_sites_df,
+    bins_slider, cmap_dropdown, log_scale_checkbox, duration_slider,
+    np, plt,
+):
+    """1x3 panel: test occupancy, control occupancy, and (test - control)."""
+    _bins = bins_slider.value
+    _dur_limit = duration_slider.value
+
+    def _concat_pool(pool):
+        if not pool:
+            return np.array([]), np.array([])
+        _gxs, _gys = [], []
+        for _p in pool:
+            _m = _p['t_rel_min'] <= _dur_limit
+            _gxs.append(_p['gx'][_m])
+            _gys.append(_p['gy'][_m])
+        return np.concatenate(_gxs), np.concatenate(_gys)
+
+    def _hist(gx, gy):
+        if len(gx) == 0:
+            return np.zeros((_bins, _bins))
+        _H, _, _ = np.histogram2d(gx, gy, bins=_bins, range=[[0, 5], [0, 5]])
+        return _H.T
+
+    _gx_t, _gy_t = _concat_pool(test_points)
+    _gx_c, _gy_c = _concat_pool(ctrl_points)
+    _H_t = _hist(_gx_t, _gy_t)
+    _H_c = _hist(_gx_c, _gy_c)
+
+    # Normalize each to probability so the difference is scale-comparable
+    _Pt = _H_t / _H_t.sum() if _H_t.sum() > 0 else _H_t
+    _Pc = _H_c / _H_c.sum() if _H_c.sum() > 0 else _H_c
+    _D = _Pt - _Pc
+
+    _ref_sites_tc = reward_sites_df[
+        (reward_sites_df['field'] == 'A') &
+        (reward_sites_df['label'].str.match(r'^A\d+$'))
+    ].copy()
+    _ref_sites_tc['_sort'] = _ref_sites_tc['grid_x'] + _ref_sites_tc['grid_y']
+    _ref_sites_tc = _ref_sites_tc.sort_values('_sort').reset_index(drop=True)
+
+    _fig_tc, _axes_tc = plt.subplots(
+        1, 3, figsize=(20, 6.5), constrained_layout=True, dpi=140,
+    )
+    _fig_tc.patch.set_alpha(0)
+
+    _disp_t = np.log1p(_H_t) if log_scale_checkbox.value else _H_t
+    _disp_c = np.log1p(_H_c) if log_scale_checkbox.value else _H_c
+    _vmax_tc = float(max(_disp_t.max(), _disp_c.max(), 1))
+    _cbar_label_tc = 'log(1+count)' if log_scale_checkbox.value else 'count'
+
+    _im_t = _axes_tc[0].imshow(
+        _disp_t, extent=[0, 5, 0, 5], origin='lower',
+        cmap=cmap_dropdown.value, aspect='equal',
+        interpolation='nearest', vmin=0, vmax=_vmax_tc,
+    )
+    _axes_tc[0].set_title(
+        f"Test (A/B/C/D, canonical frame)\n"
+        f"{len(test_points)} sheep-trials, {int(_H_t.sum()):,} pts",
+        fontsize=10,
+    )
+    _fig_tc.colorbar(_im_t, ax=_axes_tc[0], shrink=0.7, label=_cbar_label_tc)
+
+    # Reward markers in canonical Config-A frame on the test panel only
+    for _, _r in _ref_sites_tc.iterrows():
+        _axes_tc[0].scatter(
+            _r['grid_x'], _r['grid_y'],
+            s=120, zorder=5, marker='o',
+            facecolors='none', edgecolors='#FFE066', linewidths=2,
+        )
+
+    _im_c = _axes_tc[1].imshow(
+        _disp_c, extent=[0, 5, 0, 5], origin='lower',
+        cmap=cmap_dropdown.value, aspect='equal',
+        interpolation='nearest', vmin=0, vmax=_vmax_tc,
+    )
+    _axes_tc[1].set_title(
+        f"Control (CTRL_FAR/CTRL_BARN)\n"
+        f"{len(ctrl_points)} sheep-trials, {int(_H_c.sum()):,} pts",
+        fontsize=10,
+    )
+    _fig_tc.colorbar(_im_c, ax=_axes_tc[1], shrink=0.7, label=_cbar_label_tc)
+
+    _absmax = float(max(abs(_D.min()), abs(_D.max()), 1e-12))
+    _im_d = _axes_tc[2].imshow(
+        _D, extent=[0, 5, 0, 5], origin='lower',
+        cmap='RdBu_r', aspect='equal',
+        interpolation='nearest', vmin=-_absmax, vmax=_absmax,
+    )
+    _axes_tc[2].set_title(
+        "Difference: P(test) − P(control)\n(linear, divergent)",
+        fontsize=10,
+    )
+    _fig_tc.colorbar(_im_d, ax=_axes_tc[2], shrink=0.7, label='Δ probability')
+
+    for _ax_tc in _axes_tc:
+        for _v in range(1, 5):
+            _ax_tc.axvline(_v, color='white', alpha=0.15, linewidth=0.5)
+            _ax_tc.axhline(_v, color='white', alpha=0.15, linewidth=0.5)
+        _ax_tc.set_xlim(-0.05, 5.05)
+        _ax_tc.set_ylim(-0.05, 5.05)
+        _ax_tc.set_xlabel("Grid X (10 m/unit)")
+        _ax_tc.set_ylabel("Grid Y (10 m/unit)")
+        _ax_tc.set_facecolor('none')
+
+    _fig_tc
+
+
+@app.cell(hide_code=True)
+def _(
+    test_points, ctrl_points,
+    bins_slider, duration_slider,
+    np, pd, mo,
+):
+    """Sheep-ID-shuffle null on mean per-sheep occupancy entropy.
+
+    Note on methodology: shuffling sheep_id labels per point leaves the
+    aggregate trial histogram invariant, so the literal label-shuffle null on
+    aggregate entropy is degenerate. We instead use the **mean per-sheep
+    entropy** as the metric. This tests the substantive question:
+    "do sheep within a trial occupy distinct sub-regions, or are they
+    statistically interchangeable?"
+
+    For each Phase 2 trial (test or control):
+      1. Bin each sheep's points into a 2D histogram on bins_slider grid
+         and normalize to probability; H_s = -sum p log p over non-zero bins.
+      2. Observed metric = mean of H_s across sheep.
+      3. Null: permute sheep_id labels across the trial's points (preserving
+         per-sheep counts), recompute each sheep's entropy, take the mean.
+      4. N=1000, seed=42; report observed, null mean, 95% interval, p_emp.
+    """
+    _N_PERM = 1000
+    _rng = np.random.default_rng(seed=42)
+    _bins_e = bins_slider.value
+    _dur_limit_e = duration_slider.value
+
+    def _entropy(H):
+        _s = H.sum()
+        if _s <= 0:
+            return 0.0
+        _p = H.ravel() / _s
+        _nz = _p[_p > 0]
+        return float(-(_nz * np.log(_nz)).sum())
+
+    def _trial_groups(pool):
+        _by_trial = {}
+        for _p in pool:
+            _by_trial.setdefault(_p['trial_idx'], []).append(_p)
+        return _by_trial
+
+    def _mean_per_sheep_entropy(gx_all, gy_all, labels):
+        """Compute mean per-sheep entropy given concatenated coords + sheep labels."""
+        _vals = []
+        for _lab in np.unique(labels):
+            _m = labels == _lab
+            if _m.sum() == 0:
+                continue
+            _H, _, _ = np.histogram2d(
+                gx_all[_m], gy_all[_m],
+                bins=_bins_e, range=[[0, 5], [0, 5]],
+            )
+            _vals.append(_entropy(_H))
+        return float(np.mean(_vals)) if _vals else 0.0
+
+    _rows = []
+    for _pool in (test_points, ctrl_points):
+        for _tidx, _pts in _trial_groups(_pool).items():
+            _gx_parts, _gy_parts, _lab_parts = [], [], []
+            for _p in _pts:
+                _m = _p['t_rel_min'] <= _dur_limit_e
+                _gx_parts.append(_p['gx'][_m])
+                _gy_parts.append(_p['gy'][_m])
+                _lab_parts.append(np.full(int(_m.sum()), str(_p['sheep_id'])))
+            if not _gx_parts:
+                continue
+            _gx_all = np.concatenate(_gx_parts)
+            _gy_all = np.concatenate(_gy_parts)
+            _labels = np.concatenate(_lab_parts)
+            if len(_gx_all) == 0 or len(np.unique(_labels)) < 2:
+                continue
+
+            _obs = _mean_per_sheep_entropy(_gx_all, _gy_all, _labels)
+
+            _null = np.empty(_N_PERM, dtype=float)
+            _shuf = _labels.copy()
+            for _k in range(_N_PERM):
+                _rng.shuffle(_shuf)
+                _null[_k] = _mean_per_sheep_entropy(_gx_all, _gy_all, _shuf)
+
+            _p_emp = max(
+                1.0 / (_N_PERM + 1),
+                2.0 * min((_null >= _obs).mean(), (_null <= _obs).mean()),
+            )
+            _first = _pts[0]
+            _rows.append({
+                'trial_idx': _tidx,
+                'name': _first['trial_name'],
+                'config': _first['config'],
+                'n_sheep': int(len(np.unique(_labels))),
+                'observed': _obs,
+                'null_mean': float(_null.mean()),
+                'null_low': float(np.percentile(_null, 2.5)),
+                'null_high': float(np.percentile(_null, 97.5)),
+                'p_emp': _p_emp,
+            })
+
+    entropy_results = pd.DataFrame(_rows)
+    print(
+        f"Entropy null: {len(entropy_results)} trials evaluated "
+        f"(N_PERMUTATIONS={_N_PERM})"
+    )
+    if len(entropy_results):
+        _n_sig = int((entropy_results['p_emp'] < 0.05).sum())
+        print(
+            f"  observed vs null (mean): "
+            f"{entropy_results['observed'].mean():.3f} vs "
+            f"{entropy_results['null_mean'].mean():.3f}"
+        )
+        print(f"  {_n_sig}/{len(entropy_results)} trials with p_emp < 0.05")
+
+    mo.md(
+        r"""
+        ### Sheep-ID-shuffle null on mean per-sheep occupancy entropy
+
+        Aggregate occupancy entropy is invariant under sheep-ID permutation,
+        so we test the substantive question: **"do sheep within a trial
+        occupy distinct sub-regions, or are they statistically
+        interchangeable?"** via mean per-sheep entropy. Lower observed
+        entropy than the null indicates per-sheep occupancy is more
+        spatially concentrated than chance would predict if sheep were
+        interchangeable (i.e., sheep have individual sub-regions).
+        """
+    )
+    return (entropy_results,)
+
+
+@app.cell(hide_code=True)
+def _(entropy_results, mo, np, plt):
+    """Bar plot of observed mean entropy per config with 95% null whiskers + dots."""
+    if len(entropy_results) == 0:
+        _fig_e, _ax_e = plt.subplots(figsize=(8, 5))
+        _ax_e.text(
+            0.5, 0.5, "No entropy results — empty Phase 2 pools.",
+            ha='center', va='center', transform=_ax_e.transAxes,
+        )
+        _ax_e.set_axis_off()
+        _table = mo.md("_no rows_")
+    else:
+        _configs_order = ["A", "B", "C", "D", "CTRL_FAR", "CTRL_BARN"]
+        _present = [c for c in _configs_order if (entropy_results['config'] == c).any()]
+
+        _fig_e, _ax_e = plt.subplots(figsize=(9, 5.5), dpi=140)
+        _fig_e.patch.set_alpha(0)
+        _x = np.arange(len(_present))
+
+        _obs_means = []
+        _null_means = []
+        _null_los = []
+        _null_his = []
+        for _c in _present:
+            _df = entropy_results[entropy_results['config'] == _c]
+            _obs_means.append(_df['observed'].mean())
+            _null_means.append(_df['null_mean'].mean())
+            _null_los.append(_df['null_low'].mean())
+            _null_his.append(_df['null_high'].mean())
+
+        _obs_arr = np.array(_obs_means)
+        _nm_arr = np.array(_null_means)
+        _yerr = np.vstack([_nm_arr - np.array(_null_los), np.array(_null_his) - _nm_arr])
+
+        _ax_e.bar(
+            _x - 0.18, _obs_arr, width=0.36, color='#377eb8',
+            label='Observed (mean across trials)',
+        )
+        _ax_e.bar(
+            _x + 0.18, _nm_arr, width=0.36, color='#bbbbbb',
+            yerr=_yerr, capsize=4,
+            label='Null mean ± 95% (label-shuffle)',
+        )
+
+        # Per-trial dots overlaid on the observed bar
+        _jitter_rng = np.random.default_rng(0)
+        for _i_c, _c in enumerate(_present):
+            _df = entropy_results[entropy_results['config'] == _c]
+            _xs = (_x[_i_c] - 0.18) + _jitter_rng.uniform(-0.06, 0.06, len(_df))
+            _ax_e.scatter(_xs, _df['observed'], s=24, color='#222222', zorder=5, alpha=0.85)
+
+        _ax_e.set_xticks(_x)
+        _ax_e.set_xticklabels(_present)
+        _ax_e.set_ylabel("Mean per-sheep entropy (nats)")
+        _ax_e.set_title("Mean per-sheep occupancy entropy: observed vs sheep-ID-shuffle null")
+        _ax_e.legend(loc='best', fontsize=8)
+        _ax_e.grid(axis='y', alpha=0.25)
+
+        _table = mo.ui.table(entropy_results, page_size=25)
+
+    mo.vstack([mo.as_html(_fig_e), _table])
+
+
 if __name__ == "__main__":
     app.run()
