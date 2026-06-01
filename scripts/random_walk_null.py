@@ -30,7 +30,7 @@ def _():
     )
 
     KEEP_CONFIGS = {"A", "B", "C", "D", "CTRL_FAR", "CTRL_BARN"}
-    K_DEFAULT = 25
+    K_DEFAULT = 50
     ARENA_LO = 0.0
     ARENA_HI = 5.0
     COVERAGE_BIN = 0.1
@@ -120,16 +120,19 @@ def _(np):
 
 @app.cell(hide_code=True)
 def _(np, ARENA_LO, ARENA_HI):
+    def _reflect(arr, lo, hi):
+        """Fold arr into [lo, hi] via periodic tent-map reflection."""
+        span = hi - lo
+        u = (arr - lo) % (2 * span)
+        return lo + np.where(u <= span, u, 2 * span - u)
+
     def simulate_walk(start_xy, n_steps, steps_emp, turns_emp, rng):
         """Correlated random walk with reflective boundary on [ARENA_LO, ARENA_HI]^2.
 
-        Parameters
-        ----------
-        start_xy : tuple (x0, y0).
-        n_steps : int, number of segments to simulate (returns n_steps+1 samples).
-        steps_emp : ndarray of empirical step lengths to resample from.
-        turns_emp : ndarray of empirical turn angles to resample from.
-        rng : numpy Generator.
+        Vectorised: builds the unbounded trajectory with cumulative ops, then
+        folds it into the arena via a tent-map reflection. Equivalent to a
+        bouncing-wall reflection for position; the next-step heading detail is
+        absorbed because turn angles are resampled IID from the empirical pool.
         """
         if len(steps_emp) == 0 or n_steps <= 0:
             x0, y0 = start_xy
@@ -138,40 +141,19 @@ def _(np, ARENA_LO, ARENA_HI):
         if len(turns_emp) == 0:
             turns_emp = np.array([0.0])
 
-        gx = np.empty(n_steps + 1, dtype=float)
-        gy = np.empty(n_steps + 1, dtype=float)
-        gx[0], gy[0] = start_xy
-
         sampled_steps = rng.choice(steps_emp, size=n_steps)
         sampled_turns = rng.choice(turns_emp, size=n_steps)
-        heading = rng.uniform(-np.pi, np.pi)
+        heading0 = rng.uniform(-np.pi, np.pi)
+        headings = heading0 + np.cumsum(sampled_turns)
 
-        for i in range(n_steps):
-            heading = heading + sampled_turns[i]
-            step = sampled_steps[i]
-            x = gx[i] + step * np.cos(heading)
-            y = gy[i] + step * np.sin(heading)
+        dx = sampled_steps * np.cos(headings)
+        dy = sampled_steps * np.sin(headings)
+        x0, y0 = start_xy
+        x_unb = x0 + np.concatenate([[0.0], np.cumsum(dx)])
+        y_unb = y0 + np.concatenate([[0.0], np.cumsum(dy)])
 
-            # One-pass reflective fold (typical step << arena width)
-            if x < ARENA_LO:
-                x = 2 * ARENA_LO - x
-                heading = np.pi - heading
-            elif x > ARENA_HI:
-                x = 2 * ARENA_HI - x
-                heading = np.pi - heading
-            if y < ARENA_LO:
-                y = 2 * ARENA_LO - y
-                heading = -heading
-            elif y > ARENA_HI:
-                y = 2 * ARENA_HI - y
-                heading = -heading
-
-            # Clamp in the rare event of a step > arena width
-            x = min(max(x, ARENA_LO), ARENA_HI)
-            y = min(max(y, ARENA_LO), ARENA_HI)
-            gx[i + 1] = x
-            gy[i + 1] = y
-
+        gx = _reflect(x_unb, ARENA_LO, ARENA_HI)
+        gy = _reflect(y_unb, ARENA_LO, ARENA_HI)
         return gx, gy
     return (simulate_walk,)
 
@@ -359,7 +341,7 @@ def _(np, pd, plt, mo, real_df, sim_df, discovery_curves):
         _real_vals = [real_df.loc[real_df["assay"] == a, _metric].values
                       for a in _assays]
         _bp = _ax.boxplot(
-            _real_vals, labels=_assays, widths=0.5,
+            _real_vals, tick_labels=_assays, widths=0.5,
             patch_artist=True,
         )
         for _patch in _bp["boxes"]:
