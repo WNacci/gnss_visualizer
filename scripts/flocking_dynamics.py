@@ -449,5 +449,344 @@ def _(
     return
 
 
+# ---------------------------------------------------------------------------
+# Rigour pass: controls, time-reverse, and assay-shuffle nulls
+# ---------------------------------------------------------------------------
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ## Rigour pass: controls, time-reverse, and assay-shuffle nulls
+
+    Three diagnostic cells follow:
+
+    1. **Controls-aware aggregated panel** — surfaces `CTRL_FAR` and
+       `CTRL_BARN` alongside the test configs (A/B/C/D) so we can read off
+       any baseline differences in cohesion that have nothing to do with
+       the reward-site manipulation.
+    2. **Time-reverse null** — because `mean(NND)` and `mean(spread)` are
+       trivially invariant under track reversal (they depend only on the
+       per-timestep position *set*), we instead compute a temporal-asymmetry
+       contrast `Δ = mean(metric_last_third) − mean(metric_first_third)`
+       and use reversal as a sanity check (it flips the sign of `Δ`).
+    3. **Assay-shuffle null** — non-parametric significance for the
+       monotonic trend of cohesion with assay number, shuffling assay
+       labels within each `group_num` (preserves group identity).
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(TRIALS, COHESION, np, pd, plt, mo):
+    """Aggregated panel including CTRL_FAR / CTRL_BARN alongside test configs."""
+
+    _CONFIG_KEEP = {"A", "B", "C", "D", "CTRL_FAR", "CTRL_BARN"}
+    _TEST_CONFIGS = {"A", "B", "C", "D"}
+
+    _records = []
+    for _tidx, _trial in enumerate(TRIALS):
+        if _trial["group_size"] < 2 or _tidx not in COHESION:
+            continue
+        if _trial["config"] not in _CONFIG_KEEP:
+            continue
+        _c = COHESION[_tidx]
+        _records.append({
+            "Trial": _tidx,
+            "Date": _trial["date"],
+            "Config": _trial["config"],
+            "Kind": "TEST" if _trial["config"] in _TEST_CONFIGS else "CTRL",
+            "Group size": _trial["group_size"],
+            "Assay": str(_trial["assay"]),
+            "Mean NND (m)": round(_c["mean_nnd_scalar"], 2),
+            "Mean spread (m)": round(_c["mean_spread_scalar"], 2),
+        })
+
+    if not _records:
+        mo.stop(True, mo.md("*No trials match the controls-aware filter.*"))
+
+    _df = pd.DataFrame(_records)
+
+    # Ordered column layout: tests first, then controls
+    _ordered_configs = [c for c in ["A", "B", "C", "D", "CTRL_FAR", "CTRL_BARN"]
+                        if c in _df["Config"].unique()]
+    _split_idx = sum(1 for c in _ordered_configs if c in _TEST_CONFIGS)
+
+    _fig, (_ax1, _ax2) = plt.subplots(1, 2, figsize=(13, 4.5))
+
+    def _draw(ax, col, ylabel, title):
+        _data = [_df[_df["Config"] == c][col].dropna().values for c in _ordered_configs]
+        _bp = ax.boxplot(_data, labels=_ordered_configs, patch_artist=True)
+        for _i, _patch in enumerate(_bp["boxes"]):
+            _patch.set_facecolor("#a6cee3" if _i < _split_idx else "#fdbf6f")
+            _patch.set_alpha(0.75)
+        if 0 < _split_idx < len(_ordered_configs):
+            ax.axvline(_split_idx + 0.5, color="0.4", lw=1, ls="--")
+            _ymax = ax.get_ylim()[1]
+            ax.text(_split_idx / 2 + 0.5, _ymax * 0.97, "TEST",
+                    ha="center", va="top", fontsize=9, color="#1f78b4")
+            ax.text(_split_idx + (len(_ordered_configs) - _split_idx) / 2 + 0.5,
+                    _ymax * 0.97, "CTRL",
+                    ha="center", va="top", fontsize=9, color="#ff7f00")
+        ax.set_xlabel("Config")
+        ax.set_ylabel(ylabel)
+        ax.set_title(title)
+        ax.set_ylim(bottom=0)
+
+    _draw(_ax1, "Mean NND (m)", "Mean NND (m)", "Nearest-neighbour distance by config")
+    _draw(_ax2, "Mean spread (m)", "Mean spread (m)", "Group spread by config")
+    _fig.suptitle(
+        f"Cohesion: TEST (A/B/C/D) vs CTRL configs  "
+        f"({len(_df)} trials, {(_df['Kind']=='CTRL').sum()} controls)",
+        fontsize=11,
+    )
+    _fig.tight_layout()
+
+    mo.vstack([
+        _fig,
+        mo.md("### Per-trial cohesion (controls-aware)"),
+        mo.ui.table(_df.sort_values(["Kind", "Config", "Date"]).reset_index(drop=True)),
+    ])
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### Time-reverse null — early-vs-late framing
+
+    `mean(NND)` and `mean(spread)` over a whole trial are **trivially
+    invariant under track reversal**: reversing time does not change the
+    multiset of per-timestep positions, so the metric is identical. A naive
+    time-reverse null would be tautological.
+
+    To make the null meaningful, we use a temporal-asymmetry contrast:
+    `Δ = mean(metric_last_third) − mean(metric_first_third)`. Reversal
+    flips the sign of `Δ` (`Δ_rev = −Δ_fwd`), so:
+
+    - The observed `|Δ_fwd|` is the substantive quantity (does cohesion
+      drift over the trial?).
+    - The reversed version is a sign-flip sanity check, not a separate
+      sample.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(TRIALS, COHESION, np, pd, plt, mo):
+    """Time-reverse null using early-vs-late asymmetry contrast."""
+
+    _CONFIG_KEEP = {"A", "B", "C", "D", "CTRL_FAR", "CTRL_BARN"}
+    _rng = np.random.default_rng(seed=42)
+
+    _records = []
+    for _tidx, _trial in enumerate(TRIALS):
+        if _trial["group_size"] < 2 or _tidx not in COHESION:
+            continue
+        if _trial["config"] not in _CONFIG_KEEP:
+            continue
+        _c = COHESION[_tidx]
+        _n3 = len(_c["t"]) // 3
+        if _n3 < 2:
+            continue
+        _d_nnd = _c["nnd"][-_n3:].mean() * 10 - _c["nnd"][:_n3].mean() * 10
+        _d_sp = _c["spread"][-_n3:].mean() * 10 - _c["spread"][:_n3].mean() * 10
+        _records.append({
+            "Trial": _tidx,
+            "Config": _trial["config"],
+            "Assay": str(_trial["assay"]),
+            "delta_nnd_fwd": _d_nnd,
+            "delta_nnd_rev": -_d_nnd,
+            "delta_spread_fwd": _d_sp,
+            "delta_spread_rev": -_d_sp,
+        })
+
+    if not _records:
+        mo.stop(True, mo.md("*No trials available for time-reverse null.*"))
+
+    _df = pd.DataFrame(_records)
+    _assays = sorted(_df["Assay"].unique(), key=lambda x: (not x.isdigit(), x))
+    _cmap = plt.cm.get_cmap("tab10", max(len(_assays), 1))
+    _assay_color = {a: _cmap(i) for i, a in enumerate(_assays)}
+
+    def _bootstrap_ci(values, n=1000):
+        if len(values) == 0:
+            return (np.nan, np.nan, np.nan)
+        _vals = np.asarray(values, dtype=float)
+        _samples = _rng.choice(_vals, size=(n, len(_vals)), replace=True).mean(axis=1)
+        return float(_vals.mean()), float(np.percentile(_samples, 2.5)), float(np.percentile(_samples, 97.5))
+
+    _fig, _axes = plt.subplots(1, 3, figsize=(15, 4.5))
+    _ax_scatter, _ax_strip_nnd, _ax_strip_sp = _axes
+
+    # Paired scatter Δ_fwd vs Δ_rev (sits on y = −x by construction)
+    for _a in _assays:
+        _sub = _df[_df["Assay"] == _a]
+        _ax_scatter.scatter(_sub["delta_nnd_fwd"], _sub["delta_nnd_rev"],
+                            color=_assay_color[_a], label=f"Assay {_a}",
+                            s=30, alpha=0.75, edgecolor="white", linewidth=0.5)
+    _lim = max(abs(_df["delta_nnd_fwd"]).max(), 0.1) * 1.1
+    _ax_scatter.plot([-_lim, _lim], [_lim, -_lim], color="0.5", lw=0.8, ls="--",
+                     label="y = −x")
+    _ax_scatter.axhline(0, color="0.7", lw=0.5)
+    _ax_scatter.axvline(0, color="0.7", lw=0.5)
+    _ax_scatter.set_xlabel("Δ NND forward (m)")
+    _ax_scatter.set_ylabel("Δ NND reversed (m)")
+    _ax_scatter.set_title("Δ_fwd vs Δ_rev (sanity check)")
+    _ax_scatter.legend(fontsize=7, loc="best")
+    _ax_scatter.set_xlim(-_lim, _lim)
+    _ax_scatter.set_ylim(-_lim, _lim)
+
+    # Strip plots per assay with bootstrap CI for each metric
+    def _strip(ax, col, ylabel):
+        for _i, _a in enumerate(_assays):
+            _vals = _df[_df["Assay"] == _a][col].values
+            _jitter = _rng.uniform(-0.15, 0.15, size=len(_vals))
+            ax.scatter(np.full(len(_vals), _i) + _jitter, _vals,
+                       color=_assay_color[_a], s=22, alpha=0.7,
+                       edgecolor="white", linewidth=0.4)
+            _mean, _lo, _hi = _bootstrap_ci(_vals)
+            if not np.isnan(_mean):
+                ax.errorbar([_i], [_mean], yerr=[[_mean - _lo], [_hi - _mean]],
+                            fmt="o", color="black", capsize=4, lw=1.2, ms=5,
+                            zorder=10)
+        ax.axhline(0, color="red", lw=0.8, ls="--")
+        ax.set_xticks(range(len(_assays)))
+        ax.set_xticklabels(_assays)
+        ax.set_xlabel("Assay")
+        ax.set_ylabel(ylabel)
+
+    _strip(_ax_strip_nnd, "delta_nnd_fwd", "Δ NND last-first third (m)")
+    _ax_strip_nnd.set_title("Forward Δ NND by assay (mean ± 95% boot CI)")
+    _strip(_ax_strip_sp, "delta_spread_fwd", "Δ spread last-first third (m)")
+    _ax_strip_sp.set_title("Forward Δ spread by assay (mean ± 95% boot CI)")
+
+    _fig.suptitle("Time-reverse null: early-vs-late asymmetry contrast", fontsize=11)
+    _fig.tight_layout()
+
+    mo.vstack([
+        _fig,
+        mo.md("### Per-trial Δ table (forward = last_third − first_third)"),
+        mo.ui.table(_df.round(3)),
+    ])
+    return
+
+
+@app.cell(hide_code=True)
+def _(TRIALS, COHESION, np, pd, plt, mo):
+    """Assay-shuffle null on Spearman ρ between assay and cohesion."""
+    from scipy.stats import spearmanr
+
+    _CONFIG_KEEP = {"A", "B", "C", "D", "CTRL_FAR", "CTRL_BARN"}
+    _TEST_CONFIGS = {"A", "B", "C", "D"}
+    _N_PERMUTATIONS = 1000
+    _rng = np.random.default_rng(seed=42)
+
+    _records = []
+    for _tidx, _trial in enumerate(TRIALS):
+        if _trial["group_size"] < 2 or _tidx not in COHESION:
+            continue
+        if _trial["config"] not in _CONFIG_KEEP:
+            continue
+        _av = _trial["assay"]
+        try:
+            _aint = int(_av)
+        except (TypeError, ValueError):
+            continue
+        _c = COHESION[_tidx]
+        _records.append({
+            "Trial": _tidx,
+            "Config": _trial["config"],
+            "Assay": _aint,
+            "group_num": _trial["group_num"],
+            "Mean NND (m)": _c["mean_nnd_scalar"],
+            "Mean spread (m)": _c["mean_spread_scalar"],
+        })
+
+    if not _records:
+        mo.stop(True, mo.md("*No trials with digit-castable assay for shuffle null.*"))
+
+    _df = pd.DataFrame(_records)
+    _df_test = _df[_df["Config"].isin(_TEST_CONFIGS)].reset_index(drop=True)
+    if len(_df_test) < 3:
+        mo.stop(True, mo.md("*Not enough test-config trials for Spearman.*"))
+
+    _assay = _df_test["Assay"].to_numpy()
+    _groupnum = _df_test["group_num"].to_numpy()
+    _y_nnd = _df_test["Mean NND (m)"].to_numpy()
+    _y_sp = _df_test["Mean spread (m)"].to_numpy()
+
+    _rho_nnd_obs, _ = spearmanr(_assay, _y_nnd)
+    _rho_sp_obs, _ = spearmanr(_assay, _y_sp)
+
+    # Pre-compute group index slices once; permute assay within each group_num
+    _unique_groups = np.unique(_groupnum)
+    _group_indices = [np.flatnonzero(_groupnum == _g) for _g in _unique_groups]
+    _null_nnd = np.empty(_N_PERMUTATIONS)
+    _null_sp = np.empty(_N_PERMUTATIONS)
+    for _p in range(_N_PERMUTATIONS):
+        _shuf = _assay.copy()
+        for _idx in _group_indices:
+            _shuf[_idx] = _assay[_rng.permutation(_idx)]
+        _null_nnd[_p], _ = spearmanr(_shuf, _y_nnd)
+        _null_sp[_p], _ = spearmanr(_shuf, _y_sp)
+
+    _p_nnd = float((np.abs(_null_nnd) >= np.abs(_rho_nnd_obs)).mean())
+    _p_sp = float((np.abs(_null_sp) >= np.abs(_rho_sp_obs)).mean())
+    _ci_nnd = (float(np.percentile(_null_nnd, 2.5)), float(np.percentile(_null_nnd, 97.5)))
+    _ci_sp = (float(np.percentile(_null_sp, 2.5)), float(np.percentile(_null_sp, 97.5)))
+
+    _fig, (_ax1, _ax2) = plt.subplots(1, 2, figsize=(13, 4.5))
+    _ax1.hist(_null_nnd, bins=40, color="#a6cee3", edgecolor="white")
+    _ax1.axvline(_rho_nnd_obs, color="red", lw=2,
+                 label=f"observed ρ = {_rho_nnd_obs:.3f}")
+    _ax1.axvline(0, color="0.5", lw=0.7, ls="--")
+    _ax1.set_xlabel("Spearman ρ (assay vs mean NND)")
+    _ax1.set_ylabel(f"Count (N={_N_PERMUTATIONS})")
+    _ax1.set_title(f"NND ρ null (two-sided p = {_p_nnd:.3f})")
+    _ax1.legend(fontsize=9)
+
+    _ax2.hist(_null_sp, bins=40, color="#b2df8a", edgecolor="white")
+    _ax2.axvline(_rho_sp_obs, color="red", lw=2,
+                 label=f"observed ρ = {_rho_sp_obs:.3f}")
+    _ax2.axvline(0, color="0.5", lw=0.7, ls="--")
+    _ax2.set_xlabel("Spearman ρ (assay vs mean spread)")
+    _ax2.set_ylabel(f"Count (N={_N_PERMUTATIONS})")
+    _ax2.set_title(f"Spread ρ null (two-sided p = {_p_sp:.3f})")
+    _ax2.legend(fontsize=9)
+
+    _fig.suptitle(
+        f"Assay-shuffle null (within group_num) — {len(_df_test)} test trials, "
+        f"{len(_unique_groups)} groups",
+        fontsize=11,
+    )
+    _fig.tight_layout()
+
+    _summary = pd.DataFrame({
+        "Metric": ["Mean NND", "Mean spread"],
+        "Observed ρ": [round(_rho_nnd_obs, 4), round(_rho_sp_obs, 4)],
+        "Null mean ρ": [round(float(_null_nnd.mean()), 4),
+                        round(float(_null_sp.mean()), 4)],
+        "Null 95% CI": [f"[{_ci_nnd[0]:.3f}, {_ci_nnd[1]:.3f}]",
+                        f"[{_ci_sp[0]:.3f}, {_ci_sp[1]:.3f}]"],
+        "Two-sided p": [round(_p_nnd, 4), round(_p_sp, 4)],
+    })
+
+    print(f"[assay-shuffle null] NND: observed ρ={_rho_nnd_obs:+.3f}, "
+          f"two-sided p={_p_nnd:.3f}  |  "
+          f"spread: observed ρ={_rho_sp_obs:+.3f}, two-sided p={_p_sp:.3f}")
+
+    mo.vstack([
+        _fig,
+        mo.md(
+            f"**Assay-shuffle null** — labels shuffled within `group_num` "
+            f"({_N_PERMUTATIONS} permutations, seed 42). Spearman ρ computed "
+            f"on **test configs only** ({len(_df_test)} trials)."
+        ),
+        mo.ui.table(_summary),
+    ])
+    return
+
+
 if __name__ == "__main__":
     app.run()
