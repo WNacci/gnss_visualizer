@@ -585,5 +585,114 @@ def _(np, pd, plt, mo, real_df, sim_df, discovery_curves, time_window_slider):
     return
 
 
+@app.cell(hide_code=True)
+def _(np, pd, plt, mo, real_df, sim_df):
+    """Diagnostic: real sheep overlaid on per-assay sim distributions.
+
+    Grey violins are the simulated null per assay; blue dots are individual
+    real sheep with horizontal jitter. Real dots clustering outside the violin
+    bulk indicates the metric distinguishes real movement from a movement-
+    matched random walker. Two-sided empirical p-values, the median z-score
+    (real − sim_median)/sim_std per sheep, and the % of real points outside
+    the sim 5–95% envelope are reported alongside.
+    """
+    mo.stop(len(real_df) == 0, mo.md("*No sheep matched the current filter — diagnostic skipped.*"))
+
+    _assays_d = sorted(real_df["assay"].unique())
+    _metrics_d = [
+        ("coverage", "Coverage (unique cells)"),
+        ("revisit", "Revisit rate (samples/cell)"),
+        ("straightness", "Straightness (disp/path)"),
+    ]
+
+    _fig_d, _axes_d = plt.subplots(1, 3, figsize=(15, 5))
+    _summary_rows = []
+    _jitter_rng = np.random.default_rng(42)
+
+    for _ax_diag, (_metric_d, _label_d) in zip(_axes_d, _metrics_d):
+        _sim_per_assay = [
+            sim_df.loc[sim_df["assay"] == _a, _metric_d].values
+            for _a in _assays_d
+        ]
+        _real_per_assay = [
+            real_df.loc[real_df["assay"] == _a, _metric_d].values
+            for _a in _assays_d
+        ]
+
+        _vp = _ax_diag.violinplot(
+            _sim_per_assay,
+            positions=range(1, len(_assays_d) + 1),
+            widths=0.75, showmedians=True, showextrema=False,
+        )
+        for _body in _vp["bodies"]:
+            _body.set_facecolor("#cccccc")
+            _body.set_edgecolor("#888888")
+            _body.set_alpha(0.55)
+        if "cmedians" in _vp:
+            _vp["cmedians"].set_color("#444444")
+            _vp["cmedians"].set_linewidth(1.2)
+
+        for _i, (_a, _sv, _rv) in enumerate(
+            zip(_assays_d, _sim_per_assay, _real_per_assay), start=1,
+        ):
+            if len(_sv) == 0 or len(_rv) == 0:
+                continue
+            _jit = _jitter_rng.uniform(-0.18, 0.18, size=len(_rv))
+            _ax_diag.scatter(
+                _i + _jit, _rv, s=14,
+                color="#377eb8", alpha=0.7,
+                edgecolor="white", linewidth=0.4, zorder=3,
+            )
+            _sim_med = float(np.median(_sv))
+            _sim_std = float(np.std(_sv))
+            _sim_p05, _sim_p95 = np.percentile(_sv, [5, 95])
+            _z_per = (_rv - _sim_med) / max(_sim_std, 1e-9)
+            _outside = float(
+                np.mean((_rv < _sim_p05) | (_rv > _sim_p95)),
+            )
+            # Two-sided empirical p: per real point, p_i = 2 * min(P(sim<=r),
+            # P(sim>=r)); aggregate by mean across real points.
+            _p_two = float(np.mean([
+                2.0 * min(
+                    float(np.mean(_sv <= _r)),
+                    float(np.mean(_sv >= _r)),
+                )
+                for _r in _rv
+            ]))
+            _summary_rows.append({
+                "Assay": _a,
+                "Metric": _metric_d,
+                "Real median": round(float(np.median(_rv)), 3),
+                "Sim median": round(_sim_med, 3),
+                "Median z": round(float(np.median(_z_per)), 2),
+                "% real outside sim 5–95%": round(100 * _outside, 1),
+                "two-sided p": round(_p_two, 4),
+                "n_sheep": int(len(_rv)),
+            })
+
+        _ax_diag.set_xticks(range(1, len(_assays_d) + 1))
+        _ax_diag.set_xticklabels(_assays_d)
+        _ax_diag.set_xlabel("Assay")
+        _ax_diag.set_title(_label_d, fontsize=10)
+
+    _fig_d.suptitle(
+        "Diagnostic: real sheep (blue) vs simulated-walk distribution (grey)",
+        fontsize=12,
+    )
+    _fig_d.tight_layout()
+
+    _summary_df = pd.DataFrame(_summary_rows)
+    mo.vstack([
+        mo.md("### Diagnostic: real values vs simulated-walk distributions"),
+        mo.md(
+            "Median z = (real − sim_median) / sim_std (per sheep, then median "
+            "across sheep). |z|>1 ≈ real differs from null by ≥1 sim SD."
+        ),
+        _fig_d,
+        mo.ui.table(_summary_df),
+    ])
+    return
+
+
 if __name__ == "__main__":
     app.run()
