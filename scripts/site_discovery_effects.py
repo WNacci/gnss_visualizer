@@ -320,5 +320,397 @@ def _(
     return
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md("---\n## Cross-trial aggregation by assay (test configs A/B/C/D)")
+    return
+
+
+@app.cell(hide_code=True)
+def _(
+    TRIALS, TRACKS_CACHE, load_trial_tracks, detect_site_visits, DATA_DIR,
+    np, pd, plt, mo,
+):
+    """Cross-trial aggregation: collect all real discovery events from test trials."""
+    def _build_grid(tracks, dur):
+        t_common = np.arange(0, dur + 1 / 60, 1 / 60)
+        gx, gy = [], []
+        for _, trk in sorted(tracks.items()):
+            order = np.argsort(trk['t'])
+            gx.append(np.interp(t_common, trk['t'][order], trk['gx'][order]))
+            gy.append(np.interp(t_common, trk['t'][order], trk['gy'][order]))
+        return t_common, np.array(gx), np.array(gy)
+
+    def _speed_spread(gx_all, gy_all):
+        dt = 1 / 60.0
+        speed = np.sqrt(np.diff(gx_all, axis=1) ** 2 + np.diff(gy_all, axis=1) ** 2) / dt
+        speed = np.concatenate([speed, speed[:, -1:]], axis=1)
+        cx, cy = gx_all.mean(axis=0), gy_all.mean(axis=0)
+        return speed.mean(axis=0), np.sqrt((gx_all - cx) ** 2 + (gy_all - cy) ** 2).mean(axis=0)
+
+    def _before_after(mean_speed, spread, t_event, win_steps, n_t):
+        idx = int(t_event * 60)
+        lo = max(0, idx - win_steps)
+        hi = min(n_t, idx + win_steps)
+        if idx <= lo or hi <= idx:
+            return None
+        sb = float(mean_speed[lo:idx].mean())
+        sa = float(mean_speed[idx:hi].mean())
+        pb = float(spread[lo:idx].mean())
+        pa = float(spread[idx:hi].mean())
+        return {
+            'speed_before': sb, 'speed_after': sa,
+            'spread_before': pb, 'spread_after': pa,
+            'speed_pct': 100 * (sa - sb) / max(sb, 0.01),
+            'spread_pct': 100 * (pa - pb) / max(pb, 0.01),
+            't_event': float(t_event),
+        }
+
+    _TEST_CONFIGS = {"A", "B", "C", "D"}
+    _WINDOW_S = 60
+    _RADIUS = 0.5
+    _WIN_MIN = _WINDOW_S / 60.0
+    _N_BOOT = 1000
+    _rng = np.random.default_rng(seed=42)
+
+    _reward_sites_df = pd.read_csv(DATA_DIR / "fitted_reward_sites.csv")
+
+    _rows_xt = []
+    for _tidx, _trial in enumerate(TRIALS):
+        if _trial.get('config') not in _TEST_CONFIGS:
+            continue
+        _tracks = load_trial_tracks(_trial, tracks_cache=TRACKS_CACHE, apply_orient=True)
+        if not _tracks:
+            continue
+        _visits = detect_site_visits(
+            _tracks, _trial['field'], radius=_RADIUS, reward_sites_df=_reward_sites_df,
+        )
+        _first_visit_t = {
+            lbl: min(v[1] for v in vlist) for lbl, vlist in _visits.items() if vlist
+        }
+        if not _first_visit_t:
+            continue
+        _t_common, _gx, _gy = _build_grid(_tracks, _trial['duration_min'])
+        _mean_speed, _spread = _speed_spread(_gx, _gy)
+        _win_steps = max(1, int(_WIN_MIN * 60))
+        for _lbl, _t_disc in _first_visit_t.items():
+            _m = _before_after(_mean_speed, _spread, _t_disc, _win_steps, len(_t_common))
+            if _m is None:
+                continue
+            _rows_xt.append({
+                'trial_idx': _tidx,
+                'assay': _trial['assay'],
+                'config': _trial['config'],
+                'site_id': _lbl,
+                **_m,
+            })
+
+    events_df = pd.DataFrame(_rows_xt).dropna(
+        subset=['speed_pct', 'spread_pct']
+    ).reset_index(drop=True)
+
+    if events_df.empty:
+        mo.stop(True, mo.md("*No real discovery events found across test trials.*"))
+
+    _summary_rows = []
+    for _assay in sorted(events_df['assay'].unique(), key=lambda x: (x is None, str(x))):
+        _sub = events_df[events_df['assay'] == _assay]
+        if len(_sub) < 2:
+            continue
+        _sp = _sub['speed_pct'].to_numpy()
+        _sd = _sub['spread_pct'].to_numpy()
+        _n = len(_sp)
+        _idxs = _rng.integers(0, _n, size=(_N_BOOT, _n))
+        _sp_means = _sp[_idxs].mean(axis=1)
+        _sd_means = _sd[_idxs].mean(axis=1)
+        _summary_rows.append({
+            'assay': _assay,
+            'n_events': _n,
+            'speed_pct_mean': float(_sp.mean()),
+            'speed_pct_ci_lo': float(np.percentile(_sp_means, 2.5)),
+            'speed_pct_ci_hi': float(np.percentile(_sp_means, 97.5)),
+            'spread_pct_mean': float(_sd.mean()),
+            'spread_pct_ci_lo': float(np.percentile(_sd_means, 2.5)),
+            'spread_pct_ci_hi': float(np.percentile(_sd_means, 97.5)),
+        })
+    summary_df = pd.DataFrame(_summary_rows)
+
+    _fig_xt, (_ax_sp, _ax_pr) = plt.subplots(1, 2, figsize=(13, 5))
+    _assays_sorted = [r['assay'] for r in _summary_rows]
+    _sp_groups = [events_df[events_df['assay'] == a]['speed_pct'].to_numpy() for a in _assays_sorted]
+    _pr_groups = [events_df[events_df['assay'] == a]['spread_pct'].to_numpy() for a in _assays_sorted]
+    _labels = [str(a) for a in _assays_sorted]
+    _ax_sp.boxplot(_sp_groups, labels=_labels, showmeans=True)
+    _ax_sp.axhline(0, color='grey', lw=0.8, ls='--')
+    _ax_sp.set_title("Speed % change (after vs before discovery)")
+    _ax_sp.set_xlabel("Assay")
+    _ax_sp.set_ylabel("% change")
+    _ax_pr.boxplot(_pr_groups, labels=_labels, showmeans=True)
+    _ax_pr.axhline(0, color='grey', lw=0.8, ls='--')
+    _ax_pr.set_title("Spread % change (after vs before discovery)")
+    _ax_pr.set_xlabel("Assay")
+    _ax_pr.set_ylabel("% change")
+    _fig_xt.suptitle(
+        f"Cross-trial discovery effects — {len(events_df)} events, "
+        f"{events_df['trial_idx'].nunique()} test trials (configs A/B/C/D)",
+        fontsize=11,
+    )
+    _fig_xt.tight_layout()
+
+    print(f"[Cell A] events={len(events_df)} trials={events_df['trial_idx'].nunique()}")
+    print(summary_df.to_string(index=False))
+
+    mo.vstack([
+        _fig_xt,
+        mo.md("### Cross-trial summary by assay (bootstrap 95% CI, N=1000)"),
+        mo.ui.table(summary_df),
+        mo.md("### All real discovery events"),
+        mo.ui.table(events_df),
+    ])
+    return events_df, summary_df
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md("---\n## Control placebo baseline (CTRL_FAR / CTRL_BARN)")
+    return
+
+
+@app.cell(hide_code=True)
+def _(
+    TRIALS, TRACKS_CACHE, load_trial_tracks, DATA_DIR,
+    events_df, np, pd, plt, mo,
+):
+    """Sample placebo discovery times on control trials; mirror test-cell metrics."""
+    def _build_grid(tracks, dur):
+        t_common = np.arange(0, dur + 1 / 60, 1 / 60)
+        gx, gy = [], []
+        for _, trk in sorted(tracks.items()):
+            order = np.argsort(trk['t'])
+            gx.append(np.interp(t_common, trk['t'][order], trk['gx'][order]))
+            gy.append(np.interp(t_common, trk['t'][order], trk['gy'][order]))
+        return t_common, np.array(gx), np.array(gy)
+
+    def _speed_spread(gx_all, gy_all):
+        dt = 1 / 60.0
+        speed = np.sqrt(np.diff(gx_all, axis=1) ** 2 + np.diff(gy_all, axis=1) ** 2) / dt
+        speed = np.concatenate([speed, speed[:, -1:]], axis=1)
+        cx, cy = gx_all.mean(axis=0), gy_all.mean(axis=0)
+        return speed.mean(axis=0), np.sqrt((gx_all - cx) ** 2 + (gy_all - cy) ** 2).mean(axis=0)
+
+    def _before_after(mean_speed, spread, t_event, win_steps, n_t):
+        idx = int(t_event * 60)
+        lo = max(0, idx - win_steps)
+        hi = min(n_t, idx + win_steps)
+        if idx <= lo or hi <= idx:
+            return None
+        sb = float(mean_speed[lo:idx].mean())
+        sa = float(mean_speed[idx:hi].mean())
+        pb = float(spread[lo:idx].mean())
+        pa = float(spread[idx:hi].mean())
+        return {
+            'speed_before': sb, 'speed_after': sa,
+            'spread_before': pb, 'spread_after': pa,
+            'speed_pct': 100 * (sa - sb) / max(sb, 0.01),
+            'spread_pct': 100 * (pa - pb) / max(pb, 0.01),
+            't_event': float(t_event),
+        }
+
+    _CTRL_CONFIGS = {"CTRL_FAR", "CTRL_BARN"}
+    _WINDOW_S_B = 60
+    _WIN_MIN_B = _WINDOW_S_B / 60.0
+    _rng_b = np.random.default_rng(seed=42)
+
+    _per_trial = events_df.groupby('trial_idx').size()
+    K_mean = max(1, int(round(_per_trial.mean())))
+    _t_event_pool = events_df['t_event'].to_numpy()
+
+    _rows_b = []
+    for _tidx_b, _trial_b in enumerate(TRIALS):
+        if _trial_b.get('config') not in _CTRL_CONFIGS:
+            continue
+        _tracks_b = load_trial_tracks(_trial_b, tracks_cache=TRACKS_CACHE, apply_orient=True)
+        if not _tracks_b:
+            continue
+        _dur = _trial_b['duration_min']
+        _t_common_b, _gx_b, _gy_b = _build_grid(_tracks_b, _dur)
+        _mean_speed_b, _spread_b = _speed_spread(_gx_b, _gy_b)
+        _win_steps_b = max(1, int(_WIN_MIN_B * 60))
+        _samples = _rng_b.choice(_t_event_pool, size=K_mean, replace=True)
+        _samples = np.clip(_samples, _WIN_MIN_B, max(_WIN_MIN_B + 0.01, _dur - _WIN_MIN_B))
+        for _pid, _t_p in enumerate(_samples):
+            _mb = _before_after(_mean_speed_b, _spread_b, _t_p, _win_steps_b, len(_t_common_b))
+            if _mb is None:
+                continue
+            _rows_b.append({
+                'trial_idx': _tidx_b,
+                'config': _trial_b['config'],
+                'placebo_id': _pid,
+                **_mb,
+            })
+
+    ctrl_events_df = pd.DataFrame(_rows_b).dropna(
+        subset=['speed_pct', 'spread_pct']
+    ).reset_index(drop=True)
+
+    if ctrl_events_df.empty:
+        mo.stop(True, mo.md("*No control trials found or no usable placebo events.*"))
+
+    _ctrl_summary_rows = []
+    for _label, _sub_b in [
+        ('CTRL (pooled)', ctrl_events_df),
+        ('CTRL_FAR', ctrl_events_df[ctrl_events_df['config'] == 'CTRL_FAR']),
+        ('CTRL_BARN', ctrl_events_df[ctrl_events_df['config'] == 'CTRL_BARN']),
+    ]:
+        if _sub_b.empty:
+            continue
+        _ctrl_summary_rows.append({
+            'group': _label,
+            'n_events': len(_sub_b),
+            'speed_pct_mean': float(_sub_b['speed_pct'].mean()),
+            'speed_pct_std': float(_sub_b['speed_pct'].std()),
+            'spread_pct_mean': float(_sub_b['spread_pct'].mean()),
+            'spread_pct_std': float(_sub_b['spread_pct'].std()),
+        })
+    _ctrl_summary_rows.append({
+        'group': 'TEST (pooled)',
+        'n_events': len(events_df),
+        'speed_pct_mean': float(events_df['speed_pct'].mean()),
+        'speed_pct_std': float(events_df['speed_pct'].std()),
+        'spread_pct_mean': float(events_df['spread_pct'].mean()),
+        'spread_pct_std': float(events_df['spread_pct'].std()),
+    })
+    ctrl_summary_df = pd.DataFrame(_ctrl_summary_rows)
+
+    _fig_c, (_ax_s, _ax_p) = plt.subplots(1, 2, figsize=(13, 5))
+    _assays_sorted_b = sorted(
+        events_df['assay'].unique(), key=lambda x: (x is None, str(x))
+    )
+    _groups_x = [str(a) for a in _assays_sorted_b] + ['CTRL_FAR', 'CTRL_BARN']
+    _sp_data = [events_df[events_df['assay'] == a]['speed_pct'].to_numpy() for a in _assays_sorted_b]
+    _sp_data += [
+        ctrl_events_df[ctrl_events_df['config'] == 'CTRL_FAR']['speed_pct'].to_numpy(),
+        ctrl_events_df[ctrl_events_df['config'] == 'CTRL_BARN']['speed_pct'].to_numpy(),
+    ]
+    _pr_data = [events_df[events_df['assay'] == a]['spread_pct'].to_numpy() for a in _assays_sorted_b]
+    _pr_data += [
+        ctrl_events_df[ctrl_events_df['config'] == 'CTRL_FAR']['spread_pct'].to_numpy(),
+        ctrl_events_df[ctrl_events_df['config'] == 'CTRL_BARN']['spread_pct'].to_numpy(),
+    ]
+    _sp_data = [d if len(d) else np.array([0.0]) for d in _sp_data]
+    _pr_data = [d if len(d) else np.array([0.0]) for d in _pr_data]
+    _ax_s.boxplot(_sp_data, labels=_groups_x, showmeans=True)
+    _ax_s.axhline(0, color='grey', lw=0.8, ls='--')
+    _ax_s.set_title("Speed % change — test (by assay) vs control placebo")
+    _ax_s.set_ylabel("% change")
+    _ax_p.boxplot(_pr_data, labels=_groups_x, showmeans=True)
+    _ax_p.axhline(0, color='grey', lw=0.8, ls='--')
+    _ax_p.set_title("Spread % change — test (by assay) vs control placebo")
+    _ax_p.set_ylabel("% change")
+    _fig_c.suptitle(
+        f"Control placebo baseline (K={K_mean} placebos/trial sampled from test t_event pool)",
+        fontsize=11,
+    )
+    _fig_c.tight_layout()
+
+    print(f"[Cell B] K={K_mean}, ctrl_events={len(ctrl_events_df)}, "
+          f"ctrl_trials={ctrl_events_df['trial_idx'].nunique()}")
+    print(ctrl_summary_df.to_string(index=False))
+
+    mo.vstack([
+        _fig_c,
+        mo.md(f"### Control placebo baseline (K={K_mean} placebos per control trial)"),
+        mo.ui.table(ctrl_summary_df),
+        mo.md("### Placebo events"),
+        mo.ui.table(ctrl_events_df),
+    ])
+    return ctrl_events_df, ctrl_summary_df
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md("---\n## Paired before/after permutation null")
+    return
+
+
+@app.cell(hide_code=True)
+def _(events_df, np, pd, plt, mo):
+    """Per-event coin-flip swap of (before, after) labels; two-sided empirical p."""
+    _N_PERMUTATIONS = 1000
+    _rng_c = np.random.default_rng(seed=42)
+
+    _sb = events_df['speed_before'].to_numpy()
+    _sa = events_df['speed_after'].to_numpy()
+    _pb = events_df['spread_before'].to_numpy()
+    _pa = events_df['spread_after'].to_numpy()
+
+    _obs_speed = float((100 * (_sa - _sb) / np.maximum(_sb, 0.01)).mean())
+    _obs_spread = float((100 * (_pa - _pb) / np.maximum(_pb, 0.01)).mean())
+
+    _n_events = len(_sb)
+    _swap = _rng_c.random((_N_PERMUTATIONS, _n_events)) < 0.5
+    _b_s = np.where(_swap, _sa, _sb)
+    _a_s = np.where(_swap, _sb, _sa)
+    _b_p = np.where(_swap, _pa, _pb)
+    _a_p = np.where(_swap, _pb, _pa)
+    _null_speed = (100 * (_a_s - _b_s) / np.maximum(_b_s, 0.01)).mean(axis=1)
+    _null_spread = (100 * (_a_p - _b_p) / np.maximum(_b_p, 0.01)).mean(axis=1)
+
+    _p_speed = float((np.abs(_null_speed) >= np.abs(_obs_speed)).mean())
+    _p_spread = float((np.abs(_null_spread) >= np.abs(_obs_spread)).mean())
+
+    perm_summary = pd.DataFrame([
+        {
+            'metric': 'speed_pct',
+            'observed_mean': _obs_speed,
+            'null_mean': float(_null_speed.mean()),
+            'null_ci_lo': float(np.percentile(_null_speed, 2.5)),
+            'null_ci_hi': float(np.percentile(_null_speed, 97.5)),
+            'p_two_sided': _p_speed,
+            'n_events': _n_events,
+        },
+        {
+            'metric': 'spread_pct',
+            'observed_mean': _obs_spread,
+            'null_mean': float(_null_spread.mean()),
+            'null_ci_lo': float(np.percentile(_null_spread, 2.5)),
+            'null_ci_hi': float(np.percentile(_null_spread, 97.5)),
+            'p_two_sided': _p_spread,
+            'n_events': _n_events,
+        },
+    ])
+
+    _fig_p, (_ax_ns, _ax_np) = plt.subplots(1, 2, figsize=(13, 4.5))
+    _ax_ns.hist(_null_speed, bins=40, color='#2171b5', alpha=0.7)
+    _ax_ns.axvline(_obs_speed, color='red', lw=2, label=f"observed = {_obs_speed:.2f}%")
+    _ax_ns.set_title(f"Speed null (p = {_p_speed:.3f})")
+    _ax_ns.set_xlabel("% change (null draws)")
+    _ax_ns.set_ylabel("count")
+    _ax_ns.legend()
+    _ax_np.hist(_null_spread, bins=40, color='#d7191c', alpha=0.7)
+    _ax_np.axvline(_obs_spread, color='red', lw=2, label=f"observed = {_obs_spread:.2f}%")
+    _ax_np.set_title(f"Spread null (p = {_p_spread:.3f})")
+    _ax_np.set_xlabel("% change (null draws)")
+    _ax_np.set_ylabel("count")
+    _ax_np.legend()
+    _fig_p.suptitle(
+        f"Paired permutation null — coin-flip swap of (before, after) per event, "
+        f"N={_N_PERMUTATIONS}, n_events={_n_events}",
+        fontsize=11,
+    )
+    _fig_p.tight_layout()
+
+    print(f"[Cell C] obs_speed={_obs_speed:.3f}% p={_p_speed:.3f} | "
+          f"obs_spread={_obs_spread:.3f}% p={_p_spread:.3f} | n={_n_events}")
+    print(perm_summary.to_string(index=False))
+
+    mo.vstack([
+        _fig_p,
+        mo.md("### Paired permutation null"),
+        mo.ui.table(perm_summary),
+    ])
+    return perm_summary
+
+
 if __name__ == "__main__":
     app.run()
