@@ -1186,5 +1186,217 @@ def _(entropy_results, mo, np, plt):
     mo.vstack([mo.as_html(_fig_e), _table])
 
 
+@app.cell(hide_code=True)
+def _(
+    test_points, ctrl_points, reward_sites_df,
+    bins_slider, cmap_dropdown, log_scale_checkbox, duration_slider,
+    np, plt, mo,
+):
+    """Real vs movement-matched random-walk occupancy heatmaps.
+
+    For every sheep-trial in the test/control pools we fit per-sheep empirical
+    step-length and turn-angle distributions, then simulate _K_SIM correlated
+    random walks of the same length starting from the same position with
+    reflective arena boundary. The aggregate occupancy of the simulated walks
+    is rendered next to the real occupancy, plus a difference panel (red =
+    sheep concentrate more than null; blue = less).
+
+    If sheep navigate to reward sites, the real heatmap should show hotspots
+    on the canonical Config-A site positions that the simulated heatmap lacks.
+    """
+    _K_SIM = 20
+    _DECIMATE_RW = 10
+    _arena_lo, _arena_hi = 0.0, 5.0
+    _bins_rw = bins_slider.value
+    _dur_rw = duration_slider.value
+    _rng_rw = np.random.default_rng(42)
+
+    def _fit_rw(gx, gy):
+        _dx = np.diff(gx)
+        _dy = np.diff(gy)
+        _s = np.sqrt(_dx**2 + _dy**2)
+        _v = np.isfinite(_s) & (_s > 1e-6)
+        if _v.sum() < 3:
+            return _s[_v], np.array([], dtype=float)
+        _h = np.arctan2(_dy[_v], _dx[_v])
+        _tu = np.diff(np.unwrap(_h))
+        _tu = (_tu + np.pi) % (2 * np.pi) - np.pi
+        return _s[_v], _tu[np.isfinite(_tu)]
+
+    def _reflect_rw(arr, lo, hi):
+        _span = hi - lo
+        _u = (arr - lo) % (2 * _span)
+        return lo + np.where(_u <= _span, _u, 2 * _span - _u)
+
+    def _sim_walks_rw(start_xy, n_steps, steps_emp, turns_emp, K, rng):
+        if len(steps_emp) == 0 or n_steps <= 0:
+            return np.array([]), np.array([])
+        if len(turns_emp) == 0:
+            turns_emp = np.array([0.0])
+        _ss = rng.choice(steps_emp, size=(K, n_steps))
+        _tt = rng.choice(turns_emp, size=(K, n_steps))
+        _h0 = rng.uniform(-np.pi, np.pi, size=K)
+        _h = _h0[:, None] + np.cumsum(_tt, axis=1)
+        _dxs = _ss * np.cos(_h)
+        _dys = _ss * np.sin(_h)
+        _x0, _y0 = start_xy
+        _xu = np.concatenate(
+            [np.full((K, 1), _x0), _x0 + np.cumsum(_dxs, axis=1)], axis=1,
+        )
+        _yu = np.concatenate(
+            [np.full((K, 1), _y0), _y0 + np.cumsum(_dys, axis=1)], axis=1,
+        )
+        return (
+            _reflect_rw(_xu, _arena_lo, _arena_hi),
+            _reflect_rw(_yu, _arena_lo, _arena_hi),
+        )
+
+    def _simulated_pool(pool, label):
+        _gx_out, _gy_out = [], []
+        _n_used = 0
+        for _p in pool:
+            _m = _p['t_rel_min'] <= _dur_rw
+            _gx_r = np.asarray(_p['gx'][_m], dtype=float)[::_DECIMATE_RW]
+            _gy_r = np.asarray(_p['gy'][_m], dtype=float)[::_DECIMATE_RW]
+            if len(_gx_r) < 20:
+                continue
+            _steps, _turns = _fit_rw(_gx_r, _gy_r)
+            if len(_steps) < 10:
+                continue
+            _sgx, _sgy = _sim_walks_rw(
+                (float(_gx_r[0]), float(_gy_r[0])),
+                len(_gx_r) - 1, _steps, _turns, _K_SIM, _rng_rw,
+            )
+            if _sgx.size == 0:
+                continue
+            _gx_out.append(_sgx.ravel())
+            _gy_out.append(_sgy.ravel())
+            _n_used += 1
+        if not _gx_out:
+            return np.array([]), np.array([]), 0
+        return np.concatenate(_gx_out), np.concatenate(_gy_out), _n_used
+
+    def _concat_real(pool):
+        if not pool:
+            return np.array([]), np.array([])
+        _gxs, _gys = [], []
+        for _p in pool:
+            _m = _p['t_rel_min'] <= _dur_rw
+            _gxs.append(_p['gx'][_m])
+            _gys.append(_p['gy'][_m])
+        return np.concatenate(_gxs), np.concatenate(_gys)
+
+    _gx_real_t, _gy_real_t = _concat_real(test_points)
+    _gx_sim_t, _gy_sim_t, _n_test_sheep = _simulated_pool(test_points, "test")
+    _gx_real_c, _gy_real_c = _concat_real(ctrl_points)
+    _gx_sim_c, _gy_sim_c, _n_ctrl_sheep = _simulated_pool(ctrl_points, "ctrl")
+
+    def _hist_rw(gx, gy):
+        if len(gx) == 0:
+            return np.zeros((_bins_rw, _bins_rw))
+        _H, _, _ = np.histogram2d(
+            gx, gy, bins=_bins_rw, range=[[0, 5], [0, 5]],
+        )
+        return _H.T
+
+    _H_rt = _hist_rw(_gx_real_t, _gy_real_t)
+    _H_st = _hist_rw(_gx_sim_t, _gy_sim_t)
+    # Probability normalised so real-vs-sim difference is scale-comparable.
+    _P_rt = _H_rt / _H_rt.sum() if _H_rt.sum() > 0 else _H_rt
+    _P_st = _H_st / _H_st.sum() if _H_st.sum() > 0 else _H_st
+    _D_t = _P_rt - _P_st
+
+    _ref_sites_rw = reward_sites_df[
+        (reward_sites_df['field'] == 'A') &
+        (reward_sites_df['label'].str.match(r'^A\d+$'))
+    ]
+
+    _fig_rw, _axes_rw = plt.subplots(
+        1, 3, figsize=(20, 6.5), constrained_layout=True, dpi=140,
+    )
+
+    _disp_rt = np.log1p(_H_rt) if log_scale_checkbox.value else _H_rt
+    _disp_st = np.log1p(_H_st) if log_scale_checkbox.value else _H_st
+    _vmax_rw = float(max(_disp_rt.max(), _disp_st.max(), 1))
+    _cbar_label_rw = 'log(1+count)' if log_scale_checkbox.value else 'count'
+
+    _im_rt = _axes_rw[0].imshow(
+        _disp_rt, extent=[0, 5, 0, 5], origin='lower',
+        cmap=cmap_dropdown.value, aspect='equal',
+        interpolation='nearest', vmin=0, vmax=_vmax_rw,
+    )
+    _axes_rw[0].set_title(
+        f"Real test occupancy\n"
+        f"{len(test_points)} sheep-trials, {int(_H_rt.sum()):,} pts",
+        fontsize=10,
+    )
+    _fig_rw.colorbar(_im_rt, ax=_axes_rw[0], shrink=0.7, label=_cbar_label_rw)
+
+    _im_st = _axes_rw[1].imshow(
+        _disp_st, extent=[0, 5, 0, 5], origin='lower',
+        cmap=cmap_dropdown.value, aspect='equal',
+        interpolation='nearest', vmin=0, vmax=_vmax_rw,
+    )
+    _axes_rw[1].set_title(
+        f"Movement-matched random-walk occupancy\n"
+        f"{_n_test_sheep} sheep × K={_K_SIM}, {int(_H_st.sum()):,} pts",
+        fontsize=10,
+    )
+    _fig_rw.colorbar(_im_st, ax=_axes_rw[1], shrink=0.7, label=_cbar_label_rw)
+
+    _absmax_rw = float(max(abs(_D_t.min()), abs(_D_t.max()), 1e-12))
+    _im_dt = _axes_rw[2].imshow(
+        _D_t, extent=[0, 5, 0, 5], origin='lower',
+        cmap='RdBu_r', aspect='equal',
+        interpolation='nearest', vmin=-_absmax_rw, vmax=_absmax_rw,
+    )
+    _axes_rw[2].set_title(
+        "Difference: P(real) − P(sim)\nred = sheep > null, blue = sheep < null",
+        fontsize=10,
+    )
+    _fig_rw.colorbar(_im_dt, ax=_axes_rw[2], shrink=0.7, label='Δ probability')
+
+    # Reward markers on real and diff panels (canonical Config-A frame).
+    for _ax_rw in (_axes_rw[0], _axes_rw[2]):
+        for _, _r in _ref_sites_rw.iterrows():
+            _ax_rw.scatter(
+                _r['grid_x'], _r['grid_y'],
+                s=120, zorder=5, marker='o',
+                facecolors='none', edgecolors='#FFE066', linewidths=2,
+            )
+
+    for _ax_rw in _axes_rw:
+        for _v in range(1, 5):
+            _ax_rw.axvline(_v, color='white', alpha=0.15, linewidth=0.5)
+            _ax_rw.axhline(_v, color='white', alpha=0.15, linewidth=0.5)
+        _ax_rw.set_xlim(-0.05, 5.05)
+        _ax_rw.set_ylim(-0.05, 5.05)
+        _ax_rw.set_xlabel("Grid X (10 m/unit)")
+        _ax_rw.set_ylabel("Grid Y (10 m/unit)")
+
+    _fig_rw.suptitle(
+        f"Real vs movement-matched random-walk occupancy "
+        f"(Phase 2 test pool, K={_K_SIM}/sheep)",
+        fontsize=12,
+    )
+
+    print(
+        f"[RW heatmap] Real test: {int(_H_rt.sum()):,} pts | "
+        f"Sim test: {int(_H_st.sum()):,} pts ({_n_test_sheep} sheep × K={_K_SIM})"
+    )
+
+    mo.vstack([
+        mo.md("### Random-walk occupancy comparison (test pool)"),
+        mo.md(
+            "Per-sheep movement-matched correlated random walks aggregated "
+            "into a heatmap; compare against the real heatmap. Red regions "
+            "in the difference panel are where sheep spend MORE time than "
+            "their own movement statistics would predict — these are the "
+            "spatial-memory hotspots, expected near reward sites."
+        ),
+        _fig_rw,
+    ])
+
+
 if __name__ == "__main__":
     app.run()
