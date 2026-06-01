@@ -672,5 +672,121 @@ def _(TRIALS, COHESION, np, pd, plt, mo):
     return
 
 
+@app.cell(hide_code=True)
+def _(TRIALS, COHESION, np, pd, plt, mo):
+    """Assay-shuffle null on Spearman ρ between assay and cohesion."""
+    from scipy.stats import spearmanr
+
+    _CONFIG_KEEP = {"A", "B", "C", "D", "CTRL_FAR", "CTRL_BARN"}
+    _TEST_CONFIGS = {"A", "B", "C", "D"}
+    _N_PERMUTATIONS = 1000
+    _rng = np.random.default_rng(seed=42)
+
+    _records = []
+    for _tidx, _trial in enumerate(TRIALS):
+        if _trial["group_size"] < 2 or _tidx not in COHESION:
+            continue
+        if _trial["config"] not in _CONFIG_KEEP:
+            continue
+        _av = _trial["assay"]
+        try:
+            _aint = int(_av)
+        except (TypeError, ValueError):
+            continue
+        _c = COHESION[_tidx]
+        _records.append({
+            "Trial": _tidx,
+            "Config": _trial["config"],
+            "Assay": _aint,
+            "group_num": _trial["group_num"],
+            "Mean NND (m)": _c["mean_nnd_scalar"],
+            "Mean spread (m)": _c["mean_spread_scalar"],
+        })
+
+    if not _records:
+        mo.stop(True, mo.md("*No trials with digit-castable assay for shuffle null.*"))
+
+    _df = pd.DataFrame(_records)
+    _df_test = _df[_df["Config"].isin(_TEST_CONFIGS)].reset_index(drop=True)
+    if len(_df_test) < 3:
+        mo.stop(True, mo.md("*Not enough test-config trials for Spearman.*"))
+
+    _assay = _df_test["Assay"].to_numpy()
+    _groupnum = _df_test["group_num"].to_numpy()
+    _y_nnd = _df_test["Mean NND (m)"].to_numpy()
+    _y_sp = _df_test["Mean spread (m)"].to_numpy()
+
+    _rho_nnd_obs, _ = spearmanr(_assay, _y_nnd)
+    _rho_sp_obs, _ = spearmanr(_assay, _y_sp)
+
+    # Pre-compute group index slices once; permute assay within each group_num
+    _unique_groups = np.unique(_groupnum)
+    _group_indices = [np.flatnonzero(_groupnum == _g) for _g in _unique_groups]
+    _null_nnd = np.empty(_N_PERMUTATIONS)
+    _null_sp = np.empty(_N_PERMUTATIONS)
+    for _p in range(_N_PERMUTATIONS):
+        _shuf = _assay.copy()
+        for _idx in _group_indices:
+            _shuf[_idx] = _assay[_rng.permutation(_idx)]
+        _null_nnd[_p], _ = spearmanr(_shuf, _y_nnd)
+        _null_sp[_p], _ = spearmanr(_shuf, _y_sp)
+
+    _p_nnd = float((np.abs(_null_nnd) >= np.abs(_rho_nnd_obs)).mean())
+    _p_sp = float((np.abs(_null_sp) >= np.abs(_rho_sp_obs)).mean())
+    _ci_nnd = (float(np.percentile(_null_nnd, 2.5)), float(np.percentile(_null_nnd, 97.5)))
+    _ci_sp = (float(np.percentile(_null_sp, 2.5)), float(np.percentile(_null_sp, 97.5)))
+
+    _fig, (_ax1, _ax2) = plt.subplots(1, 2, figsize=(13, 4.5))
+    _ax1.hist(_null_nnd, bins=40, color="#a6cee3", edgecolor="white")
+    _ax1.axvline(_rho_nnd_obs, color="red", lw=2,
+                 label=f"observed ρ = {_rho_nnd_obs:.3f}")
+    _ax1.axvline(0, color="0.5", lw=0.7, ls="--")
+    _ax1.set_xlabel("Spearman ρ (assay vs mean NND)")
+    _ax1.set_ylabel(f"Count (N={_N_PERMUTATIONS})")
+    _ax1.set_title(f"NND ρ null (two-sided p = {_p_nnd:.3f})")
+    _ax1.legend(fontsize=9)
+
+    _ax2.hist(_null_sp, bins=40, color="#b2df8a", edgecolor="white")
+    _ax2.axvline(_rho_sp_obs, color="red", lw=2,
+                 label=f"observed ρ = {_rho_sp_obs:.3f}")
+    _ax2.axvline(0, color="0.5", lw=0.7, ls="--")
+    _ax2.set_xlabel("Spearman ρ (assay vs mean spread)")
+    _ax2.set_ylabel(f"Count (N={_N_PERMUTATIONS})")
+    _ax2.set_title(f"Spread ρ null (two-sided p = {_p_sp:.3f})")
+    _ax2.legend(fontsize=9)
+
+    _fig.suptitle(
+        f"Assay-shuffle null (within group_num) — {len(_df_test)} test trials, "
+        f"{len(_unique_groups)} groups",
+        fontsize=11,
+    )
+    _fig.tight_layout()
+
+    _summary = pd.DataFrame({
+        "Metric": ["Mean NND", "Mean spread"],
+        "Observed ρ": [round(_rho_nnd_obs, 4), round(_rho_sp_obs, 4)],
+        "Null mean ρ": [round(float(_null_nnd.mean()), 4),
+                        round(float(_null_sp.mean()), 4)],
+        "Null 95% CI": [f"[{_ci_nnd[0]:.3f}, {_ci_nnd[1]:.3f}]",
+                        f"[{_ci_sp[0]:.3f}, {_ci_sp[1]:.3f}]"],
+        "Two-sided p": [round(_p_nnd, 4), round(_p_sp, 4)],
+    })
+
+    print(f"[assay-shuffle null] NND: observed ρ={_rho_nnd_obs:+.3f}, "
+          f"two-sided p={_p_nnd:.3f}  |  "
+          f"spread: observed ρ={_rho_sp_obs:+.3f}, two-sided p={_p_sp:.3f}")
+
+    mo.vstack([
+        _fig,
+        mo.md(
+            f"**Assay-shuffle null** — labels shuffled within `group_num` "
+            f"({_N_PERMUTATIONS} permutations, seed 42). Spearman ρ computed "
+            f"on **test configs only** ({len(_df_test)} trials)."
+        ),
+        mo.ui.table(_summary),
+    ])
+    return
+
+
 if __name__ == "__main__":
     app.run()
