@@ -964,5 +964,212 @@ def _(cos_df, acf_traces, ts_traces, rep_trial, mo, np, plt):
     return
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(
+        "---\n"
+        "## Pairwise directional influence\n\n"
+        "For every ordered pair of sheep (i, j) in a trial, compute the "
+        "time-lagged cross-correlation of their unit velocity vectors for "
+        "lags ∈ [−30, +30] s. Define influence(i→j) = max ρ at lag > 0 "
+        "minus max ρ at lag < 0 — positive values mean j follows i. The "
+        "trial's asymmetry score is mean(|M − Mᵀ|)/2; a circular-shift null "
+        "(each sheep's track independently rotated by ≥5 min) gives a "
+        "two-sided empirical p-value under the no-directional-influence H₀."
+    )
+    return
+
+
+@app.cell(hide_code=True)
+def _(TRIALS, TRACKS_CACHE, load_trial_tracks, np, pd):
+    _TEST_CONFIGS = {'A', 'B', 'C', 'D', 'CTRL_FAR', 'CTRL_BARN'}
+    _DT = 1.0 / 60.0
+    _LAG_MAX = 30  # seconds
+    _MIN_SHIFT = 300  # 5 min, in 1-s frames
+    _N_PERMUTATIONS = 2000
+    _rng = np.random.default_rng(seed=42)
+
+    def _influence_matrix(_ux, _uy, _lag_max):
+        # Vectorised over all (i, j, lag): builds an N×N×(2L+1) tensor of
+        # cross-correlations of unit velocity vectors, then reduces to N×N
+        # asymmetry M[i,j] = max_{lag>0} ρ_{ij}(lag) - max_{lag<0} ρ_{ij}(lag).
+        _n, _T = _ux.shape
+        _ww = _T - _lag_max  # window length common to all lags
+        _max_lag = _lag_max
+        _M = np.zeros((_n, _n))
+        # ρ_{ij}(lag) ≈ mean over t in [max_lag, T - max_lag) of u_i(t-lag) · u_j(t)
+        # Precompute centred j-side slice once per j.
+        _j_x = np.stack([_ux[:, _max_lag:_T - _max_lag]] * 1, axis=0)[0]
+        _j_y = np.stack([_uy[:, _max_lag:_T - _max_lag]] * 1, axis=0)[0]
+        _xc = np.zeros((_n, _n, 2 * _lag_max + 1))
+        for _li, _lag in enumerate(range(-_lag_max, _lag_max + 1)):
+            _i_x = _ux[:, _max_lag - _lag:_T - _max_lag - _lag]
+            _i_y = _uy[:, _max_lag - _lag:_T - _max_lag - _lag]
+            # outer over (i, j): (n, w) @ (w, n) = (n, n)
+            _xc[:, :, _li] = (_i_x @ _j_x.T + _i_y @ _j_y.T) / _i_x.shape[1]
+        _peak_pos = _xc[:, :, _lag_max + 1:].max(axis=2)
+        _peak_neg = _xc[:, :, :_lag_max].max(axis=2)
+        _M = _peak_pos - _peak_neg
+        np.fill_diagonal(_M, 0.0)
+        return _M
+
+    def _asymmetry(_M):
+        return float(np.abs(_M - _M.T).mean() / 2.0)
+
+    _inf_rows = []
+    _rep_inf_mat = None
+    _rep_inf_ids = None
+    _null_asym_example = None
+    _rep_trial = None
+
+    for _tidx, _trial in enumerate(TRIALS):
+        if _trial['group_size'] < 2 or _trial['config'] not in _TEST_CONFIGS:
+            continue
+        _tracks = load_trial_tracks(
+            _trial, tracks_cache=TRACKS_CACHE, apply_orient=True,
+        )
+        if len(_tracks) < 2:
+            continue
+
+        _sids = sorted(_tracks.keys())
+        _n = len(_sids)
+        _dur = _trial['duration_min']
+        _t = np.arange(0, _dur + _DT, _DT)
+        _T = len(_t)
+        if _T < 2 * _MIN_SHIFT + 2 * _LAG_MAX + 30:
+            continue
+        _gx = np.zeros((_n, _T))
+        _gy = np.zeros((_n, _T))
+        for _ci, _sid in enumerate(_sids):
+            _trk = _tracks[_sid]
+            _o = np.argsort(_trk['t'])
+            _gx[_ci] = np.interp(_t, _trk['t'][_o], _trk['gx'][_o])
+            _gy[_ci] = np.interp(_t, _trk['t'][_o], _trk['gy'][_o])
+
+        _kernel = np.ones(15) / 15
+        _vx = np.zeros((_n, _T))
+        _vy = np.zeros((_n, _T))
+        for _ci in range(_n):
+            _vx[_ci] = np.convolve(np.gradient(_gx[_ci], _t), _kernel, mode='same')
+            _vy[_ci] = np.convolve(np.gradient(_gy[_ci], _t), _kernel, mode='same')
+        _mag = np.sqrt(_vx**2 + _vy**2)
+        _mag_safe = np.where(_mag > 1e-9, _mag, 1.0)
+        _ux = _vx / _mag_safe
+        _uy = _vy / _mag_safe
+        # Zero out near-stationary frames so they don't drag the correlation.
+        _ux = np.where(_mag > 0.02, _ux, 0.0)
+        _uy = np.where(_mag > 0.02, _uy, 0.0)
+
+        _M_obs = _influence_matrix(_ux, _uy, _LAG_MAX)
+        _asym_obs = _asymmetry(_M_obs)
+
+        _null_asym = np.empty(_N_PERMUTATIONS)
+        for _p in range(_N_PERMUTATIONS):
+            _shifts = _rng.integers(_MIN_SHIFT, _T - _MIN_SHIFT, size=_n)
+            _ux_s = np.zeros_like(_ux)
+            _uy_s = np.zeros_like(_uy)
+            for _ci in range(_n):
+                _s = int(_shifts[_ci])
+                _ux_s[_ci] = np.roll(_ux[_ci], _s)
+                _uy_s[_ci] = np.roll(_uy[_ci], _s)
+            _M_null = _influence_matrix(_ux_s, _uy_s, _LAG_MAX)
+            _null_asym[_p] = _asymmetry(_M_null)
+
+        _p_hi = (np.sum(_null_asym >= _asym_obs) + 1) / (_N_PERMUTATIONS + 1)
+        _p_lo = (np.sum(_null_asym <= _asym_obs) + 1) / (_N_PERMUTATIONS + 1)
+        _p_two = float(2 * min(_p_hi, _p_lo))
+        _null_mean = float(_null_asym.mean())
+        _null_lo = float(np.quantile(_null_asym, 0.025))
+        _null_hi = float(np.quantile(_null_asym, 0.975))
+
+        _inf_rows.append({
+            'Trial': _tidx,
+            'Date': _trial['date'],
+            'Config': _trial['config'],
+            'Assay group': 'CTRL' if _trial['config'].startswith('CTRL') else str(_trial['assay']),
+            'n sheep': _n,
+            'Asymmetry': round(_asym_obs, 4),
+            'Null mean': round(_null_mean, 4),
+            'Null 2.5%': round(_null_lo, 4),
+            'Null 97.5%': round(_null_hi, 4),
+            'p (two-sided)': round(_p_two, 4),
+        })
+
+        if _rep_inf_mat is None and _n >= 3:
+            _rep_inf_mat = _M_obs
+            _rep_inf_ids = _sids
+            _null_asym_example = _null_asym.copy()
+            _rep_trial = _tidx
+
+    inf_df = pd.DataFrame(_inf_rows)
+    rep_inf_mat = _rep_inf_mat
+    rep_inf_ids = _rep_inf_ids
+    null_asym_example = _null_asym_example
+    rep_inf_trial = _rep_trial
+    return inf_df, rep_inf_mat, rep_inf_ids, null_asym_example, rep_inf_trial
+
+
+@app.cell(hide_code=True)
+def _(inf_df, rep_inf_mat, rep_inf_ids, null_asym_example, rep_inf_trial,
+      mo, np, plt):
+    _fig, (_axA, _axB, _axC) = plt.subplots(1, 3, figsize=(15, 4.6))
+
+    # A: influence heatmap
+    if rep_inf_mat is not None:
+        _vmax = float(np.abs(rep_inf_mat).max())
+        _im = _axA.imshow(rep_inf_mat, cmap='RdBu_r', vmin=-_vmax, vmax=_vmax)
+        _axA.set_xticks(range(len(rep_inf_ids)))
+        _axA.set_yticks(range(len(rep_inf_ids)))
+        _axA.set_xticklabels([f'S{_s}' for _s in rep_inf_ids], fontsize=8)
+        _axA.set_yticklabels([f'S{_s}' for _s in rep_inf_ids], fontsize=8)
+        _axA.set_xlabel('Follower j')
+        _axA.set_ylabel('Leader i')
+        _axA.set_title(f'Influence i → j (trial {rep_inf_trial})')
+        _fig.colorbar(_im, ax=_axA, fraction=0.046, pad=0.04)
+
+    # B: null histogram for example trial
+    if null_asym_example is not None and len(inf_df):
+        _row = inf_df[inf_df['Trial'] == rep_inf_trial].iloc[0]
+        _obs = float(_row['Asymmetry'])
+        _p = float(_row['p (two-sided)'])
+        _axB.hist(null_asym_example, bins=40, color='#bbbbbb', edgecolor='k', linewidth=0.3)
+        _axB.axvline(_obs, color='red', lw=1.4, label=f'obs={_obs:.3f}')
+        _axB.set_xlabel('Asymmetry under null')
+        _axB.set_ylabel('Count')
+        _axB.set_title(f'Circular-shift null (trial {rep_inf_trial}, p={_p:.3f})')
+        _axB.legend(fontsize=8)
+
+    # C: observed asymmetry by assay group + null-mean line
+    if len(inf_df):
+        _assays = sorted(
+            [a for a in inf_df['Assay group'].unique() if a != 'CTRL'],
+            key=lambda x: (not x.isdigit(), x),
+        )
+        if (inf_df['Assay group'] == 'CTRL').any():
+            _assays.append('CTRL')
+        _by_a = [inf_df[inf_df['Assay group'] == _a]['Asymmetry'].values for _a in _assays]
+        _axC.boxplot(_by_a, tick_labels=_assays, widths=0.5)
+        _null_med = float(inf_df['Null mean'].median())
+        _axC.axhline(_null_med, color='red', ls='--', lw=0.8,
+                     label=f'Null mean (med={_null_med:.3f})')
+        _axC.set_xlabel('Assay group')
+        _axC.set_ylabel('Asymmetry')
+        _axC.set_title('Directional asymmetry by assay')
+        _axC.legend(fontsize=8)
+
+    _fig.tight_layout()
+    _n_sig = int((inf_df['p (two-sided)'] < 0.05).sum()) if len(inf_df) else 0
+    mo.vstack([
+        _fig,
+        mo.md(
+            f"**{len(inf_df)} trials** tested. "
+            f"{_n_sig} reject the no-directional-influence null at α=0.05 "
+            f"(two-sided, circular-shift, N=2000 perms)."
+        ),
+        mo.ui.table(inf_df),
+    ])
+    return
+
+
 if __name__ == "__main__":
     app.run()
