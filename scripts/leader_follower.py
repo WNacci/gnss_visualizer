@@ -1414,5 +1414,210 @@ def _(cell_df, pair_rows, observed_mean_rho, null_mean_rho, rank_p,
     return
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(
+        "---\n"
+        "## Leader-vs-pioneer overlap\n\n"
+        "Per trial, compute the Spearman rank correlation between two "
+        "per-sheep rankings: (a) frontal leadership fraction, and (b) "
+        "pioneer-visit counts (first-arrival to reward sites). A high ρ "
+        "means the sheep that leads from the front is also the sheep that "
+        "first arrives at sites. Null per trial: 2000 permutations of the "
+        "pioneer-rank vector against the (fixed) leadership-rank vector."
+    )
+    return
+
+
+@app.cell(hide_code=True)
+def _(TRIALS, TRACKS_CACHE, load_trial_tracks, detect_site_visits,
+      DATA_DIR, np, pd):
+    _TEST_CONFIGS = {'A', 'B', 'C', 'D', 'CTRL_FAR', 'CTRL_BARN'}
+    _N_PERMUTATIONS = 2000
+    _rng = np.random.default_rng(seed=42)
+    _DT = 1.0 / 60.0
+    _RADIUS = 0.5
+
+    _rdf = pd.read_csv(DATA_DIR / "fitted_reward_sites.csv")
+
+    def _spearman_fast(_v1, _v2):
+        _r1 = np.argsort(np.argsort(_v1)).astype(float)
+        _r2 = np.argsort(np.argsort(_v2)).astype(float)
+        _d1 = _r1 - _r1.mean()
+        _d2 = _r2 - _r2.mean()
+        _num = (_d1 * _d2).sum()
+        _den = np.sqrt((_d1 * _d1).sum() * (_d2 * _d2).sum())
+        return float(_num / _den) if _den > 0 else float('nan')
+
+    _rows = []
+    _null_pool = []  # pool of all per-trial null rhos
+    _obs_rhos = []
+
+    for _tidx, _trial in enumerate(TRIALS):
+        if _trial['group_size'] < 2 or _trial['config'] not in _TEST_CONFIGS:
+            continue
+        _tracks = load_trial_tracks(
+            _trial, tracks_cache=TRACKS_CACHE, apply_orient=True,
+        )
+        if len(_tracks) < 2:
+            continue
+        _sids = sorted(_tracks.keys())
+        _n = len(_sids)
+        _dur = _trial['duration_min']
+        _t = np.arange(0, _dur + _DT, _DT)
+        _gx = np.zeros((_n, len(_t)))
+        _gy = np.zeros((_n, len(_t)))
+        for _ci, _sid in enumerate(_sids):
+            _trk = _tracks[_sid]
+            _o = np.argsort(_trk['t'])
+            _gx[_ci] = np.interp(_t, _trk['t'][_o], _trk['gx'][_o])
+            _gy[_ci] = np.interp(_t, _trk['t'][_o], _trk['gy'][_o])
+
+        _cx = _gx.mean(axis=0)
+        _cy = _gy.mean(axis=0)
+        _kernel = np.ones(15) / 15
+        _vcx = np.convolve(np.gradient(_cx, _t), _kernel, mode='same')
+        _vcy = np.convolve(np.gradient(_cy, _t), _kernel, mode='same')
+        _vs = np.sqrt(_vcx**2 + _vcy**2)
+        _vss = np.where(_vs > 1e-6, _vs, 1.0)
+        _vnx = _vcx / _vss
+        _vny = _vcy / _vss
+        _dx = _gx - _cx
+        _dy = _gy - _cy
+        _proj = _dx * _vnx + _dy * _vny
+        _moving = _vs > 0.02
+        _leader = np.argmax(_proj, axis=0)
+        _leader[~_moving] = -1
+        _frames = _leader[_leader >= 0]
+        if len(_frames) == 0:
+            continue
+        _counts = np.bincount(_frames, minlength=_n).astype(float)
+        _lf = _counts / len(_frames)
+
+        # Pioneer counts: first arrival to each site.
+        _visits = detect_site_visits(
+            _tracks, _trial['field'], radius=_RADIUS,
+            reward_sites_df=_rdf,
+        )
+        _pioneer = {_sid: 0 for _sid in _sids}
+        for _lbl, _vlist in _visits.items():
+            if not _vlist:
+                continue
+            _first = min(_vlist, key=lambda x: x[1])
+            if _first[0] in _pioneer:
+                _pioneer[_first[0]] += 1
+        _pi = np.array([_pioneer[_sid] for _sid in _sids], dtype=float)
+
+        if np.std(_lf) < 1e-9 or np.std(_pi) < 1e-9:
+            continue
+        if _n < 3:
+            continue
+
+        _rho = _spearman_fast(_lf, _pi)
+        if np.isnan(_rho):
+            continue
+
+        _r_lead = np.argsort(np.argsort(_lf)).astype(float)
+        _null = np.empty(_N_PERMUTATIONS)
+        for _p in range(_N_PERMUTATIONS):
+            _pi_perm = _rng.permutation(_pi)
+            _r2 = np.argsort(np.argsort(_pi_perm)).astype(float)
+            _d1 = _r_lead - _r_lead.mean()
+            _d2 = _r2 - _r2.mean()
+            _num = (_d1 * _d2).sum()
+            _den = np.sqrt((_d1 * _d1).sum() * (_d2 * _d2).sum())
+            _null[_p] = float(_num / _den) if _den > 0 else 0.0
+
+        _p_hi = (np.sum(_null >= _rho) + 1) / (_N_PERMUTATIONS + 1)
+        _p_lo = (np.sum(_null <= _rho) + 1) / (_N_PERMUTATIONS + 1)
+        _p_two = float(2 * min(_p_hi, _p_lo))
+
+        _rows.append({
+            'Trial': _tidx,
+            'Date': _trial['date'],
+            'Config': _trial['config'],
+            'Assay group': 'CTRL' if _trial['config'].startswith('CTRL') else str(_trial['assay']),
+            'n sheep': _n,
+            'rho': round(float(_rho), 4),
+            'null mean': round(float(_null.mean()), 4),
+            'null 2.5%': round(float(np.quantile(_null, 0.025)), 4),
+            'null 97.5%': round(float(np.quantile(_null, 0.975)), 4),
+            'p (two-sided)': round(_p_two, 4),
+        })
+        _null_pool.extend(_null.tolist())
+        _obs_rhos.append(_rho)
+
+    pioneer_df = pd.DataFrame(_rows)
+    null_pool = np.array(_null_pool) if _null_pool else np.zeros(0)
+    obs_rhos = np.array(_obs_rhos) if _obs_rhos else np.zeros(0)
+    return pioneer_df, null_pool, obs_rhos
+
+
+@app.cell(hide_code=True)
+def _(pioneer_df, null_pool, obs_rhos, mo, np, plt):
+    _fig, (_axA, _axB, _axC) = plt.subplots(1, 3, figsize=(15, 4.6))
+
+    # A: per-trial rho boxplot by Assay group
+    if len(pioneer_df):
+        _assays = sorted(
+            [a for a in pioneer_df['Assay group'].unique() if a != 'CTRL'],
+            key=lambda x: (not x.isdigit(), x),
+        )
+        if (pioneer_df['Assay group'] == 'CTRL').any():
+            _assays.append('CTRL')
+        _by_a = [pioneer_df[pioneer_df['Assay group'] == _a]['rho'].values
+                 for _a in _assays]
+        _axA.boxplot(_by_a, tick_labels=_assays, widths=0.5)
+        _axA.axhline(0, color='k', lw=0.4)
+        _axA.set_xlabel('Assay group')
+        _axA.set_ylabel('Spearman ρ (leader vs pioneer)')
+        _axA.set_title('Leader-pioneer overlap per trial')
+        _axA.set_ylim(-1.05, 1.05)
+    else:
+        _axA.text(0.5, 0.5, 'No trials', ha='center', va='center',
+                  transform=_axA.transAxes)
+
+    # B: pooled null distribution vs pooled observed mean
+    if len(null_pool):
+        _axB.hist(null_pool, bins=60, color='#bbbbbb', edgecolor='k', linewidth=0.3,
+                  label=f'pooled null (n={len(null_pool)})')
+        _obs_mean = float(obs_rhos.mean())
+        _null_mean = float(null_pool.mean())
+        _axB.axvline(_obs_mean, color='red', lw=1.4,
+                     label=f'mean obs ρ = {_obs_mean:.3f}')
+        _axB.axvline(_null_mean, color='blue', ls='--', lw=0.8,
+                     label=f'mean null ρ = {_null_mean:.3f}')
+        _axB.set_xlabel('Spearman ρ')
+        _axB.set_ylabel('Count')
+        _axB.set_title('Pooled null vs observed')
+        _axB.legend(fontsize=8)
+
+    # C: trial-level outcomes — bar of ρ sorted with red shading for p<0.05
+    if len(pioneer_df):
+        _sorted = pioneer_df.sort_values('rho').reset_index(drop=True)
+        _colors = ['#E8823A' if _p < 0.05 else '#3B7DD8'
+                   for _p in _sorted['p (two-sided)']]
+        _axC.bar(range(len(_sorted)), _sorted['rho'], color=_colors,
+                 edgecolor='k', linewidth=0.3)
+        _axC.axhline(0, color='k', lw=0.4)
+        _axC.set_xlabel('Trial (sorted by ρ)')
+        _axC.set_ylabel('Spearman ρ')
+        _axC.set_title(f'Per-trial ρ (orange = p<0.05, n_sig={(pioneer_df["p (two-sided)"]<0.05).sum()})')
+        _axC.set_ylim(-1.05, 1.05)
+
+    _fig.tight_layout()
+    _n_sig = int((pioneer_df['p (two-sided)'] < 0.05).sum()) if len(pioneer_df) else 0
+    _med = float(pioneer_df['rho'].median()) if len(pioneer_df) else float('nan')
+    mo.vstack([
+        _fig,
+        mo.md(
+            f"**{len(pioneer_df)} trials** tested. Median ρ = {_med:.3f}. "
+            f"{_n_sig} reject the null at α=0.05 (two-sided, N=2000 perms per trial)."
+        ),
+        mo.ui.table(pioneer_df),
+    ])
+    return
+
+
 if __name__ == "__main__":
     app.run()
