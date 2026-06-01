@@ -990,22 +990,16 @@ def _(TRIALS, TRACKS_CACHE, load_trial_tracks, np, pd):
     _rng = np.random.default_rng(seed=42)
 
     def _influence_matrix(_ux, _uy, _lag_max):
-        # Vectorised over all (i, j, lag): builds an N×N×(2L+1) tensor of
-        # cross-correlations of unit velocity vectors, then reduces to N×N
-        # asymmetry M[i,j] = max_{lag>0} ρ_{ij}(lag) - max_{lag<0} ρ_{ij}(lag).
+        # ρ_{ij}(lag) ≈ mean over t ∈ [lag_max, T − lag_max) of u_i(t − lag) · u_j(t).
+        # Builds the (n, n, 2L+1) cross-correlation tensor via batched matmul,
+        # then reduces to M[i,j] = max_{lag>0} ρ − max_{lag<0} ρ.
         _n, _T = _ux.shape
-        _ww = _T - _lag_max  # window length common to all lags
-        _max_lag = _lag_max
-        _M = np.zeros((_n, _n))
-        # ρ_{ij}(lag) ≈ mean over t in [max_lag, T - max_lag) of u_i(t-lag) · u_j(t)
-        # Precompute centred j-side slice once per j.
-        _j_x = np.stack([_ux[:, _max_lag:_T - _max_lag]] * 1, axis=0)[0]
-        _j_y = np.stack([_uy[:, _max_lag:_T - _max_lag]] * 1, axis=0)[0]
-        _xc = np.zeros((_n, _n, 2 * _lag_max + 1))
+        _j_x = _ux[:, _lag_max:_T - _lag_max]
+        _j_y = _uy[:, _lag_max:_T - _lag_max]
+        _xc = np.empty((_n, _n, 2 * _lag_max + 1))
         for _li, _lag in enumerate(range(-_lag_max, _lag_max + 1)):
-            _i_x = _ux[:, _max_lag - _lag:_T - _max_lag - _lag]
-            _i_y = _uy[:, _max_lag - _lag:_T - _max_lag - _lag]
-            # outer over (i, j): (n, w) @ (w, n) = (n, n)
+            _i_x = _ux[:, _lag_max - _lag:_T - _lag_max - _lag]
+            _i_y = _uy[:, _lag_max - _lag:_T - _lag_max - _lag]
             _xc[:, :, _li] = (_i_x @ _j_x.T + _i_y @ _j_y.T) / _i_x.shape[1]
         _peak_pos = _xc[:, :, _lag_max + 1:].max(axis=2)
         _peak_neg = _xc[:, :, :_lag_max].max(axis=2)
@@ -1063,16 +1057,14 @@ def _(TRIALS, TRACKS_CACHE, load_trial_tracks, np, pd):
         _M_obs = _influence_matrix(_ux, _uy, _LAG_MAX)
         _asym_obs = _asymmetry(_M_obs)
 
+        # Vectorised circular shift across all sheep via fancy-indexed gather.
+        _col_idx = np.arange(_T)
         _null_asym = np.empty(_N_PERMUTATIONS)
         for _p in range(_N_PERMUTATIONS):
             _shifts = _rng.integers(_MIN_SHIFT, _T - _MIN_SHIFT, size=_n)
-            _ux_s = np.zeros_like(_ux)
-            _uy_s = np.zeros_like(_uy)
-            for _ci in range(_n):
-                _s = int(_shifts[_ci])
-                _ux_s[_ci] = np.roll(_ux[_ci], _s)
-                _uy_s[_ci] = np.roll(_uy[_ci], _s)
-            _M_null = _influence_matrix(_ux_s, _uy_s, _LAG_MAX)
+            _gather = (_col_idx[None, :] - _shifts[:, None]) % _T
+            _row_idx = np.arange(_n)[:, None]
+            _M_null = _influence_matrix(_ux[_row_idx, _gather], _uy[_row_idx, _gather], _LAG_MAX)
             _null_asym[_p] = _asymmetry(_M_null)
 
         _p_hi = (np.sum(_null_asym >= _asym_obs) + 1) / (_N_PERMUTATIONS + 1)
