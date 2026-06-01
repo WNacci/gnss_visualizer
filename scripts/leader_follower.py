@@ -1171,5 +1171,248 @@ def _(inf_df, rep_inf_mat, rep_inf_ids, null_asym_example, rep_inf_trial,
     return
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(
+        "---\n"
+        "## Leadership-rank stability across assays\n\n"
+        "For each social group, average per-sheep frontal leadership fractions "
+        "within each (group, assay) cell, then compute Spearman ρ between every "
+        "pair of assays restricted to the sheep present in both. The mean ρ "
+        "across (group, assay-pair) combinations measures rank stability. "
+        "The null shuffles sheep IDs independently within each (group, assay) "
+        "vector — preserving group and assay marginals while breaking any "
+        "true rank relationship."
+    )
+    return
+
+
+@app.cell(hide_code=True)
+def _(TRIALS, TRACKS_CACHE, load_trial_tracks, np, pd):
+    _TEST_CONFIGS = {'A', 'B', 'C', 'D', 'CTRL_FAR', 'CTRL_BARN'}
+    _N_PERMUTATIONS = 2000
+    _rng = np.random.default_rng(seed=42)
+    _DT = 1.0 / 60.0
+
+    # Aggregate per-sheep leadership fraction per (group_num, assay group)
+    # by collecting per-trial leadership fractions then averaging within cell.
+    _per_trial_lf = []  # rows: group_num, assay group, sheep, lf
+    for _trial in TRIALS:
+        if _trial['group_size'] < 2 or _trial['config'] not in _TEST_CONFIGS:
+            continue
+        _tracks = load_trial_tracks(
+            _trial, tracks_cache=TRACKS_CACHE, apply_orient=True,
+        )
+        if len(_tracks) < 2:
+            continue
+        _sids = sorted(_tracks.keys())
+        _n = len(_sids)
+        _dur = _trial['duration_min']
+        _t = np.arange(0, _dur + _DT, _DT)
+        _gx = np.zeros((_n, len(_t)))
+        _gy = np.zeros((_n, len(_t)))
+        for _ci, _sid in enumerate(_sids):
+            _trk = _tracks[_sid]
+            _o = np.argsort(_trk['t'])
+            _gx[_ci] = np.interp(_t, _trk['t'][_o], _trk['gx'][_o])
+            _gy[_ci] = np.interp(_t, _trk['t'][_o], _trk['gy'][_o])
+        _cx = _gx.mean(axis=0)
+        _cy = _gy.mean(axis=0)
+        _kernel = np.ones(15) / 15
+        _vcx = np.convolve(np.gradient(_cx, _t), _kernel, mode='same')
+        _vcy = np.convolve(np.gradient(_cy, _t), _kernel, mode='same')
+        _vs = np.sqrt(_vcx**2 + _vcy**2)
+        _vss = np.where(_vs > 1e-6, _vs, 1.0)
+        _vnx = _vcx / _vss
+        _vny = _vcy / _vss
+        _dx = _gx - _cx
+        _dy = _gy - _cy
+        _proj = _dx * _vnx + _dy * _vny
+        _moving = _vs > 0.02
+        _leader = np.argmax(_proj, axis=0)
+        _leader[~_moving] = -1
+        _frames = _leader[_leader >= 0]
+        if len(_frames) == 0:
+            continue
+        _counts = np.bincount(_frames, minlength=_n).astype(float)
+        _lf = _counts / len(_frames)
+        _ag = 'CTRL' if _trial['config'].startswith('CTRL') else str(_trial['assay'])
+        for _ci, _sid in enumerate(_sids):
+            _per_trial_lf.append({
+                'group_num': int(_trial['group_num']),
+                'Assay group': _ag,
+                'sheep': _sid,
+                'lf': float(_lf[_ci]),
+            })
+
+    _lf_df = pd.DataFrame(_per_trial_lf)
+    if len(_lf_df) == 0:
+        cell_df = pd.DataFrame()
+        pair_rows = []
+        observed_mean_rho = float('nan')
+        null_mean_rho = np.zeros(0)
+        rank_p = float('nan')
+    else:
+        cell_df = (
+            _lf_df.groupby(['group_num', 'Assay group', 'sheep'])['lf']
+            .mean().reset_index()
+        )
+
+        # Build per-(group, assay) sheep→lf map.
+        _cells = {}
+        for _, _row in cell_df.iterrows():
+            _cells.setdefault(
+                (int(_row['group_num']), _row['Assay group']), {}
+            )[_row['sheep']] = float(_row['lf'])
+
+        # Pre-compute pair metadata + shared-sheep positional indices into
+        # each cell's value pool.
+        _pool_keys = {_k: list(_v.keys()) for _k, _v in _cells.items()}
+        _pool_vals = {_k: np.array(list(_v.values())) for _k, _v in _cells.items()}
+
+        _pairs_meta = []
+        _groups = sorted({_g for (_g, _a) in _cells.keys()})
+        for _gn in _groups:
+            _assays_here = sorted({_a for (_g, _a) in _cells.keys() if _g == _gn})
+            for _i, _a1 in enumerate(_assays_here):
+                for _a2 in _assays_here[_i + 1:]:
+                    _k1, _k2 = (_gn, _a1), (_gn, _a2)
+                    _shared = sorted(set(_pool_keys[_k1]) & set(_pool_keys[_k2]))
+                    if len(_shared) < 3:
+                        continue
+                    _idx1 = np.array([_pool_keys[_k1].index(_s) for _s in _shared])
+                    _idx2 = np.array([_pool_keys[_k2].index(_s) for _s in _shared])
+                    _pairs_meta.append({
+                        'group_num': _gn, 'a1': _a1, 'a2': _a2,
+                        'shared': _shared, 'idx1': _idx1, 'idx2': _idx2,
+                        'k1': _k1, 'k2': _k2, 'n': len(_shared),
+                    })
+
+        def _spearman_fast(_v1, _v2):
+            # Spearman ρ via ordinal ranks (argsort-of-argsort); ~5× faster than
+            # pandas.rank for the small (n≤~10) vectors we have here. Ties in
+            # leadership fractions are extremely rare so ordinal ≈ average rank.
+            _r1 = np.argsort(np.argsort(_v1)).astype(float)
+            _r2 = np.argsort(np.argsort(_v2)).astype(float)
+            _d1 = _r1 - _r1.mean()
+            _d2 = _r2 - _r2.mean()
+            _num = (_d1 * _d2).sum()
+            _den = np.sqrt((_d1 * _d1).sum() * (_d2 * _d2).sum())
+            return float(_num / _den) if _den > 0 else float('nan')
+
+        def _pair_rhos_from_pools(_pools):
+            # Returns rows with rho computed via ordinal Spearman so observed
+            # and null statistics are exactly comparable.
+            _rows = []
+            for _m in _pairs_meta:
+                _v1 = _pools[_m['k1']][_m['idx1']]
+                _v2 = _pools[_m['k2']][_m['idx2']]
+                if np.std(_v1) < 1e-9 or np.std(_v2) < 1e-9:
+                    continue
+                _rho = _spearman_fast(_v1, _v2)
+                if np.isnan(_rho):
+                    continue
+                _rows.append({
+                    'group_num': _m['group_num'],
+                    'a1': _m['a1'], 'a2': _m['a2'],
+                    'n_shared': int(_m['n']),
+                    'rho': float(_rho),
+                })
+            return _rows
+
+        pair_rows = _pair_rhos_from_pools(_pool_vals)
+        if not pair_rows:
+            observed_mean_rho = float('nan')
+            null_mean_rho = np.zeros(0)
+            rank_p = float('nan')
+        else:
+            observed_mean_rho = float(np.mean([_r['rho'] for _r in pair_rows]))
+
+            null_mean_rho = np.empty(_N_PERMUTATIONS)
+            for _p in range(_N_PERMUTATIONS):
+                _shuf_pool = {_k: _rng.permutation(_v) for _k, _v in _pool_vals.items()}
+                _nr = _pair_rhos_from_pools(_shuf_pool)
+                null_mean_rho[_p] = (
+                    float(np.mean([_r['rho'] for _r in _nr])) if _nr else 0.0
+                )
+            _p_hi = (np.sum(null_mean_rho >= observed_mean_rho) + 1) / (_N_PERMUTATIONS + 1)
+            _p_lo = (np.sum(null_mean_rho <= observed_mean_rho) + 1) / (_N_PERMUTATIONS + 1)
+            rank_p = float(2 * min(_p_hi, _p_lo))
+
+    return cell_df, pair_rows, observed_mean_rho, null_mean_rho, rank_p
+
+
+@app.cell(hide_code=True)
+def _(cell_df, pair_rows, observed_mean_rho, null_mean_rho, rank_p,
+      mo, np, pd, plt):
+    _fig, (_axA, _axB) = plt.subplots(1, 2, figsize=(13, 4.6))
+
+    # A: histogram of null mean ρ with observed line
+    if len(null_mean_rho):
+        _null_mean = float(null_mean_rho.mean())
+        _lo, _hi = float(np.quantile(null_mean_rho, 0.025)), float(np.quantile(null_mean_rho, 0.975))
+        _axA.hist(null_mean_rho, bins=40, color='#bbbbbb',
+                  edgecolor='k', linewidth=0.3)
+        _axA.axvline(observed_mean_rho, color='red', lw=1.4,
+                     label=f'obs={observed_mean_rho:.3f}')
+        _axA.axvline(_lo, color='blue', ls='--', lw=0.7)
+        _axA.axvline(_hi, color='blue', ls='--', lw=0.7,
+                     label=f'null 95% [{_lo:.3f}, {_hi:.3f}]')
+        _axA.set_xlabel('Mean Spearman ρ across (group, assay-pair)')
+        _axA.set_ylabel('Count')
+        _axA.set_title(f'Sheep-ID shuffle null (p={rank_p:.3f})')
+        _axA.legend(fontsize=8)
+    else:
+        _axA.text(0.5, 0.5, 'No (group, assay-pair) with ≥3 shared sheep',
+                  ha='center', va='center', transform=_axA.transAxes)
+
+    # B: per-group heatmap of pairwise-assay ρ — pooled into a long table
+    if pair_rows:
+        _pr = pd.DataFrame(pair_rows)
+        _groups = sorted(_pr['group_num'].unique())
+        _assays = sorted(
+            set(_pr['a1']) | set(_pr['a2']),
+            key=lambda x: (x == 'CTRL', not x.isdigit(), x),
+        )
+        _mat = np.full((len(_groups), len(_assays) * (len(_assays) - 1) // 2), np.nan)
+        _col_labels = []
+        _ci = 0
+        for _i, _a1 in enumerate(_assays):
+            for _a2 in _assays[_i + 1:]:
+                _col_labels.append(f'{_a1}↔{_a2}')
+                for _ri, _g in enumerate(_groups):
+                    _sub = _pr[(_pr['group_num'] == _g) & (
+                        ((_pr['a1'] == _a1) & (_pr['a2'] == _a2)) |
+                        ((_pr['a1'] == _a2) & (_pr['a2'] == _a1))
+                    )]
+                    if len(_sub):
+                        _mat[_ri, _ci] = float(_sub['rho'].iloc[0])
+                _ci += 1
+        _im = _axB.imshow(_mat, cmap='RdBu_r', vmin=-1, vmax=1, aspect='auto')
+        _axB.set_xticks(range(len(_col_labels)))
+        _axB.set_xticklabels(_col_labels, rotation=45, ha='right', fontsize=8)
+        _axB.set_yticks(range(len(_groups)))
+        _axB.set_yticklabels([f'G{_g}' for _g in _groups])
+        _axB.set_xlabel('Assay pair')
+        _axB.set_ylabel('Group')
+        _axB.set_title('Per-group pairwise ρ')
+        _fig.colorbar(_im, ax=_axB, fraction=0.046, pad=0.04)
+    else:
+        _axB.text(0.5, 0.5, 'No pair data', ha='center', va='center',
+                  transform=_axB.transAxes)
+
+    _fig.tight_layout()
+    mo.vstack([
+        _fig,
+        mo.md(
+            f"**Observed mean ρ = {observed_mean_rho:.3f}** across {len(pair_rows)} "
+            f"(group, assay-pair) combinations. Two-sided permutation p = {rank_p:.3f} "
+            f"(N=2000)."
+        ),
+        mo.ui.table(pd.DataFrame(pair_rows)) if pair_rows else mo.md("*No pair data.*"),
+    ])
+    return
+
+
 if __name__ == "__main__":
     app.run()
