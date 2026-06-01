@@ -226,7 +226,8 @@ def _(
     np, pd, plt,
 ):
     """Aggregate path length across test-configuration trials."""
-    _TEST_CONFIGS = {'A', 'B', 'C', 'D'}
+    _TEST_CONFIGS = {"A", "B", "C", "D", "CTRL_FAR", "CTRL_BARN"}
+    _CTRL_CONFIGS = {"CTRL_FAR", "CTRL_BARN"}
     _records = []
 
     for _tidx, _trial in enumerate(TRIALS):
@@ -267,8 +268,10 @@ def _(
             'Date': _trial['date'],
             'Field': _trial['field'],
             'Config': _trial['config'],
+            'Group num': _trial['group_num'],
             'Group size': _trial['group_size'],
             'Assay': str(_trial['assay']),
+            'is_control': _trial['config'] in _CTRL_CONFIGS,
             'Sites found': len(_sorted_first),
             'Completion time (min)': round(_completion_time, 2) if _completion_time is not None else None,
             'Mean path to completion (m)': round(float(np.mean(_path_vals)), 1) if _path_vals else None,
@@ -282,19 +285,27 @@ def _(
 
     _fig2, (_ax1, _ax2) = plt.subplots(1, 2, figsize=(12, 4))
 
-    # Box plots by assay
-    _assays = sorted(_agg_df['Assay'].unique(), key=lambda x: (not x.isdigit(), x))
-    _ct_by_assay = [_agg_df[_agg_df['Assay'] == a]['Completion time (min)'].dropna().values
-                    for a in _assays]
-    _pl_by_assay = [_agg_df[_agg_df['Assay'] == a]['Mean path to completion (m)'].dropna().values
-                    for a in _assays]
+    # Box plots by assay — test trials per-assay, controls pooled into one bucket
+    _test_df = _agg_df[~_agg_df['is_control']]
+    _ctrl_df = _agg_df[_agg_df['is_control']]
+    _assays = sorted(
+        _test_df['Assay'].astype(str).unique(),
+        key=lambda x: (not x.isdigit(), x),
+    )
+    _xlabels = _assays + ['CTRL']
 
-    _ax1.boxplot(_ct_by_assay, labels=_assays)
+    def _bucket(col):
+        return [
+            _test_df[_test_df['Assay'].astype(str) == a][col].dropna().values
+            for a in _assays
+        ] + [_ctrl_df[col].dropna().values]
+
+    _ax1.boxplot(_bucket('Completion time (min)'), labels=_xlabels)
     _ax1.set_xlabel("Assay")
     _ax1.set_ylabel("Completion time (min)")
     _ax1.set_title("Time to find 3rd site")
 
-    _ax2.boxplot(_pl_by_assay, labels=_assays)
+    _ax2.boxplot(_bucket('Mean path to completion (m)'), labels=_xlabels)
     _ax2.set_xlabel("Assay")
     _ax2.set_ylabel("Mean path length (m)")
     _ax2.set_title("Path length to find 3rd site")
