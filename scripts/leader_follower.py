@@ -415,7 +415,7 @@ def _(
     np, pd, plt,
 ):
     """Compute leadership and recruitment entropy for every multi-sheep test trial."""
-    _TEST_CONFIGS = {'A', 'B', 'C', 'D'}
+    _TEST_CONFIGS = {'A', 'B', 'C', 'D', 'CTRL_FAR', 'CTRL_BARN'}
     _rdf_agg = pd.read_csv(DATA_DIR / "fitted_reward_sites.csv")
     _records = []
 
@@ -494,6 +494,7 @@ def _(
             'Config': _trial['config'],
             'Group size': _trial['group_size'],
             'Assay': str(_trial['assay']),
+            'Assay group': 'CTRL' if _trial['config'].startswith('CTRL') else str(_trial['assay']),
             'Frontal entropy': round(_norm, 3),
             'Dominant leader frac.': round(float(_lf.max()), 3),
             'Recruitment entropy': round(_r_norm, 3),
@@ -507,29 +508,34 @@ def _(
     _agg_df = pd.DataFrame(_records)
 
     _fig2, (_ax1, _ax2, _ax3) = plt.subplots(1, 3, figsize=(15, 4))
-    _assays = sorted(_agg_df['Assay'].unique(), key=lambda x: (not x.isdigit(), x))
+    _assays = sorted(
+        [a for a in _agg_df['Assay group'].unique() if a != 'CTRL'],
+        key=lambda x: (not x.isdigit(), x),
+    )
+    if (_agg_df['Assay group'] == 'CTRL').any():
+        _assays.append('CTRL')
 
-    _ent_by_assay = [_agg_df[_agg_df['Assay'] == a]['Frontal entropy'].dropna().values
+    _ent_by_assay = [_agg_df[_agg_df['Assay group'] == a]['Frontal entropy'].dropna().values
                      for a in _assays]
-    _dom_by_assay = [_agg_df[_agg_df['Assay'] == a]['Dominant leader frac.'].dropna().values
+    _dom_by_assay = [_agg_df[_agg_df['Assay group'] == a]['Dominant leader frac.'].dropna().values
                      for a in _assays]
-    _rec_by_assay = [_agg_df[_agg_df['Assay'] == a]['Recruitment entropy'].dropna().values
+    _rec_by_assay = [_agg_df[_agg_df['Assay group'] == a]['Recruitment entropy'].dropna().values
                      for a in _assays]
 
     _ax1.boxplot(_ent_by_assay, labels=_assays)
-    _ax1.set_xlabel("Assay")
+    _ax1.set_xlabel("Assay group")
     _ax1.set_ylabel("Normalised entropy")
     _ax1.set_title("Frontal leadership entropy\n(low = one sheep leads)")
     _ax1.set_ylim(0, 1.05)
 
     _ax2.boxplot(_dom_by_assay, labels=_assays)
-    _ax2.set_xlabel("Assay")
+    _ax2.set_xlabel("Assay group")
     _ax2.set_ylabel("Dominant leader fraction")
     _ax2.set_title("Frontal: dominant sheep fraction")
     _ax2.set_ylim(0, 1.05)
 
     _ax3.boxplot(_rec_by_assay, labels=_assays)
-    _ax3.set_xlabel("Assay")
+    _ax3.set_xlabel("Assay group")
     _ax3.set_ylabel("Normalised entropy")
     _ax3.set_title("Recruitment entropy\n(low = one sheep always initiates)")
     _ax3.set_ylim(0, 1.05)
@@ -574,7 +580,7 @@ def _(
 ):
     from scipy.stats import binomtest, chisquare
 
-    _TEST_CONFIGS = {'A', 'B', 'C', 'D'}
+    _TEST_CONFIGS = {'A', 'B', 'C', 'D', 'CTRL_FAR', 'CTRL_BARN'}
     _N_PERMS = 2000
     _ALPHA = 0.05
     _RNG = np.random.default_rng(0)
@@ -671,6 +677,7 @@ def _(
             'Date': _trial['date'],
             'Config': _trial['config'],
             'Assay': str(_trial['assay']),
+            'Assay group': 'CTRL' if _trial['config'].startswith('CTRL') else str(_trial['assay']),
             'n': _n,
             'T (frames)': _T,
             'R (runs)': _R,
@@ -688,7 +695,12 @@ def _(
         mo.stop(True, mo.md("*No multi-sheep test trials found.*"))
 
     _bdf = pd.DataFrame(_rows)
-    _assays = sorted(_bdf['Assay'].unique(), key=lambda x: (not x.isdigit(), x))
+    _assays = sorted(
+        [a for a in _bdf['Assay group'].unique() if a != 'CTRL'],
+        key=lambda x: (not x.isdigit(), x),
+    )
+    if (_bdf['Assay group'] == 'CTRL').any():
+        _assays.append('CTRL')
 
     _fig3, _axes3 = plt.subplots(1, 3, figsize=(15, 4.2))
     _axA, _axB, _axC = _axes3
@@ -697,7 +709,7 @@ def _(
 
     # A: empirical p-value per trial, log-scaled
     for _ai, _a in enumerate(_assays):
-        _sub = _bdf[_bdf['Assay'] == _a]
+        _sub = _bdf[_bdf['Assay group'] == _a]
         _y = np.clip(_sub['Block-perm p (chi²)'].values, _floor, 1.0)
         _x = _ai + _jitter_rng.uniform(-0.15, 0.15, size=len(_y))
         _axA.scatter(_x, _y, s=30, alpha=0.75, color='#3B7DD8',
@@ -706,14 +718,14 @@ def _(
     _axA.set_yscale('log')
     _axA.set_xticks(range(len(_assays)))
     _axA.set_xticklabels(_assays)
-    _axA.set_xlabel('Assay')
+    _axA.set_xlabel('Assay group')
     _axA.set_ylabel('Block-perm p (chi²)')
     _axA.set_title('Empirical p-value vs. "all-equal" null')
     _axA.legend(fontsize=8)
 
     # B: observed max-leader fraction vs. null 97.5% bound
-    _obs_by_a = [_bdf[_bdf['Assay'] == _a]['Max leader frac.'].values for _a in _assays]
-    _null_by_a = [_bdf[_bdf['Assay'] == _a]['Null max 97.5%'].values for _a in _assays]
+    _obs_by_a = [_bdf[_bdf['Assay group'] == _a]['Max leader frac.'].values for _a in _assays]
+    _null_by_a = [_bdf[_bdf['Assay group'] == _a]['Null max 97.5%'].values for _a in _assays]
     _axB.boxplot(
         _obs_by_a, labels=_assays, widths=0.5, patch_artist=True,
         boxprops=dict(facecolor='#3B7DD840', edgecolor='#3B7DD8'),
@@ -723,7 +735,7 @@ def _(
     _axB.plot(range(1, len(_assays) + 1), _null_med, 'r--', lw=1.2,
               marker='_', markersize=10,
               label='Null 97.5% (median per assay)')
-    _axB.set_xlabel('Assay')
+    _axB.set_xlabel('Assay group')
     _axB.set_ylabel('Max leader fraction')
     _axB.set_title('Observed dominance vs. null upper bound')
     _axB.set_ylim(0, 1.05)
@@ -733,7 +745,7 @@ def _(
     _frac_reject = []
     _n_trials = []
     for _a in _assays:
-        _sub = _bdf[_bdf['Assay'] == _a]
+        _sub = _bdf[_bdf['Assay group'] == _a]
         _frac_reject.append(float(_sub['Reject H₀'].mean()) if len(_sub) else 0.0)
         _n_trials.append(int(len(_sub)))
     _axC.bar(range(len(_assays)), _frac_reject, color='#E8823A',
@@ -745,7 +757,7 @@ def _(
                   fontsize=8, color='#444')
     _axC.set_xticks(range(len(_assays)))
     _axC.set_xticklabels(_assays)
-    _axC.set_xlabel('Assay')
+    _axC.set_xlabel('Assay group')
     _axC.set_ylabel('Fraction of trials rejecting H₀')
     _axC.set_title('"Consistent leader" rate (numbers = n trials)')
     _axC.set_ylim(0, 1.05)
@@ -756,11 +768,11 @@ def _(
 
     _pooled_rows = []
     for _a in _assays:
-        _sub = _bdf[_bdf['Assay'] == _a]
+        _sub = _bdf[_bdf['Assay group'] == _a]
         if not len(_sub):
             continue
         _pooled_rows.append({
-            'Assay': _a,
+            'Assay group': _a,
             'n trials': int(len(_sub)),
             'Median max frac.': round(float(_sub['Max leader frac.'].median()), 3),
             'Median null max 97.5%': round(float(_sub['Null max 97.5%'].median()), 3),
@@ -787,6 +799,814 @@ def _(
         mo.ui.table(_pooled_df),
         mo.md("### Per-trial detail"),
         mo.ui.table(_bdf),
+    ])
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(
+        "---\n"
+        "## Continuous leadership score (cosine projection)\n\n"
+        "For every sheep at every timestep, project the sheep velocity onto "
+        "the centroid velocity. Score = cos(θ) ∈ [−1, 1]. Reports per-sheep "
+        "mean / std, autocorrelation up to 60 s lag, and persistence time "
+        "(lag at which ACF drops below 1/e)."
+    )
+    return
+
+
+@app.cell(hide_code=True)
+def _(TRIALS, TRACKS_CACHE, load_trial_tracks, np, pd):
+    _TEST_CONFIGS = {'A', 'B', 'C', 'D', 'CTRL_FAR', 'CTRL_BARN'}
+    _ACF_MAX_LAG_S = 60
+    _DT = 1.0 / 60.0  # minutes per frame (1 s ticks)
+
+    _per_sheep = []
+    _acf_traces = {}
+    _ts_traces = {}
+    _rep_trial = None
+
+    for _tidx, _trial in enumerate(TRIALS):
+        if _trial['group_size'] < 2 or _trial['config'] not in _TEST_CONFIGS:
+            continue
+        _tracks = load_trial_tracks(
+            _trial, tracks_cache=TRACKS_CACHE, apply_orient=True,
+        )
+        if len(_tracks) < 2:
+            continue
+
+        _sids = sorted(_tracks.keys())
+        _n = len(_sids)
+        _dur = _trial['duration_min']
+        _t = np.arange(0, _dur + _DT, _DT)
+        _gx = np.zeros((_n, len(_t)))
+        _gy = np.zeros((_n, len(_t)))
+        for _ci, _sid in enumerate(_sids):
+            _trk = _tracks[_sid]
+            _o = np.argsort(_trk['t'])
+            _gx[_ci] = np.interp(_t, _trk['t'][_o], _trk['gx'][_o])
+            _gy[_ci] = np.interp(_t, _trk['t'][_o], _trk['gy'][_o])
+
+        _cx = _gx.mean(axis=0)
+        _cy = _gy.mean(axis=0)
+        _kernel = np.ones(15) / 15
+        _vcx = np.convolve(np.gradient(_cx, _t), _kernel, mode='same')
+        _vcy = np.convolve(np.gradient(_cy, _t), _kernel, mode='same')
+        _vc_mag = np.sqrt(_vcx**2 + _vcy**2)
+
+        _trial_ts = {}
+        for _ci, _sid in enumerate(_sids):
+            _vsx = np.convolve(np.gradient(_gx[_ci], _t), _kernel, mode='same')
+            _vsy = np.convolve(np.gradient(_gy[_ci], _t), _kernel, mode='same')
+            _vs_mag = np.sqrt(_vsx**2 + _vsy**2)
+            _denom = _vs_mag * _vc_mag
+            _cos = np.where(
+                _denom > 1e-9,
+                (_vsx * _vcx + _vsy * _vcy) / np.maximum(_denom, 1e-9),
+                0.0,
+            )
+            _moving = _vc_mag > 0.02
+            _cos_m = _cos[_moving]
+            if len(_cos_m) < 30:
+                continue
+
+            _x = _cos_m - _cos_m.mean()
+            _var = (_x * _x).mean() + 1e-12
+            _acf = np.array([
+                (_x[:-_k] * _x[_k:]).mean() / _var if _k > 0 else 1.0
+                for _k in range(_ACF_MAX_LAG_S + 1)
+            ])
+            _below = np.where(_acf < np.exp(-1))[0]
+            _persist = float(_below[0]) if len(_below) else float(_ACF_MAX_LAG_S)
+
+            _per_sheep.append({
+                'Trial': _tidx,
+                'Date': _trial['date'],
+                'Config': _trial['config'],
+                'Assay group': 'CTRL' if _trial['config'].startswith('CTRL') else str(_trial['assay']),
+                'Sheep': _sid,
+                'Mean cos': float(_cos_m.mean()),
+                'Std cos': float(_cos_m.std()),
+                'Persistence (s)': _persist,
+            })
+            _acf_traces[(_tidx, _sid)] = _acf
+            _trial_ts[_sid] = (_t.copy(), _cos.copy())
+
+        _ts_traces[_tidx] = _trial_ts
+        if _rep_trial is None and len(_trial_ts) >= 2:
+            _rep_trial = _tidx
+
+    cos_df = pd.DataFrame(_per_sheep)
+    acf_traces = _acf_traces
+    ts_traces = _ts_traces
+    rep_trial = _rep_trial
+    return cos_df, acf_traces, ts_traces, rep_trial
+
+
+@app.cell(hide_code=True)
+def _(cos_df, acf_traces, ts_traces, rep_trial, mo, np, plt):
+    _fig, _axes = plt.subplots(2, 2, figsize=(13, 9))
+    _axA, _axB, _axC, _axD = _axes.ravel()
+
+    # A: representative trial time series
+    if rep_trial is not None and rep_trial in ts_traces:
+        for _sid, (_t, _cos) in ts_traces[rep_trial].items():
+            _axA.plot(_t, _cos, lw=0.6, alpha=0.7, label=f"S{_sid}")
+        _axA.axhline(0, color='k', lw=0.4)
+        _axA.set_xlabel('Time (min)')
+        _axA.set_ylabel('cos(θ)')
+        _axA.set_title(f'Per-sheep alignment, trial {rep_trial}')
+        _axA.legend(fontsize=7, ncol=2)
+
+    # B: ACF overlay
+    for _acf in acf_traces.values():
+        _axB.plot(np.arange(len(_acf)), _acf, lw=0.4, alpha=0.3, color='#3B7DD8')
+    _axB.axhline(np.exp(-1), color='red', ls='--', lw=0.8, label='1/e')
+    _axB.set_xlabel('Lag (s)')
+    _axB.set_ylabel('ACF')
+    _axB.set_title('Sheep-level alignment ACF')
+    _axB.legend(fontsize=8)
+
+    _assays = sorted(
+        [a for a in cos_df['Assay group'].unique() if a != 'CTRL'],
+        key=lambda x: (not x.isdigit(), x),
+    )
+    if (cos_df['Assay group'] == 'CTRL').any():
+        _assays.append('CTRL')
+
+    _by_a = [cos_df[cos_df['Assay group'] == _a]['Persistence (s)'].values
+             for _a in _assays]
+    _axC.boxplot(_by_a, tick_labels=_assays, widths=0.5)
+    _axC.set_xlabel('Assay group')
+    _axC.set_ylabel('Persistence (s)')
+    _axC.set_title('Leadership persistence time')
+
+    _by_m = [cos_df[cos_df['Assay group'] == _a]['Mean cos'].values for _a in _assays]
+    _axD.boxplot(_by_m, tick_labels=_assays, widths=0.5)
+    _axD.axhline(0, color='k', lw=0.4)
+    _axD.set_xlabel('Assay group')
+    _axD.set_ylabel('Mean cos(θ)')
+    _axD.set_title('Mean alignment to centroid')
+
+    _fig.tight_layout()
+
+    _median_persist = float(cos_df['Persistence (s)'].median()) if len(cos_df) else float('nan')
+    _median_mean = float(cos_df['Mean cos'].median()) if len(cos_df) else float('nan')
+    mo.vstack([
+        _fig,
+        mo.md(
+            f"**{len(cos_df)} sheep-trials** included. "
+            f"Median persistence time: {_median_persist:.1f} s. "
+            f"Median mean cos(θ): {_median_mean:.3f}."
+        ),
+    ])
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(
+        "---\n"
+        "## Pairwise directional influence\n\n"
+        "For every ordered pair of sheep (i, j) in a trial, compute the "
+        "time-lagged cross-correlation of their unit velocity vectors for "
+        "lags ∈ [−30, +30] s. Define influence(i→j) = max ρ at lag > 0 "
+        "minus max ρ at lag < 0 — positive values mean j follows i. The "
+        "trial's asymmetry score is mean(|M − Mᵀ|)/2; a circular-shift null "
+        "(each sheep's track independently rotated by ≥5 min) gives a "
+        "two-sided empirical p-value under the no-directional-influence H₀."
+    )
+    return
+
+
+@app.cell(hide_code=True)
+def _(TRIALS, TRACKS_CACHE, load_trial_tracks, np, pd):
+    _TEST_CONFIGS = {'A', 'B', 'C', 'D', 'CTRL_FAR', 'CTRL_BARN'}
+    _DT = 1.0 / 60.0
+    _LAG_MAX = 30  # seconds
+    _MIN_SHIFT = 300  # 5 min, in 1-s frames
+    _N_PERMUTATIONS = 2000
+    _rng = np.random.default_rng(seed=42)
+
+    def _influence_matrix(_ux, _uy, _lag_max):
+        # ρ_{ij}(lag) ≈ mean over t ∈ [lag_max, T − lag_max) of u_i(t − lag) · u_j(t).
+        # Builds the (n, n, 2L+1) cross-correlation tensor via batched matmul,
+        # then reduces to M[i,j] = max_{lag>0} ρ − max_{lag<0} ρ.
+        _n, _T = _ux.shape
+        _j_x = _ux[:, _lag_max:_T - _lag_max]
+        _j_y = _uy[:, _lag_max:_T - _lag_max]
+        _xc = np.empty((_n, _n, 2 * _lag_max + 1))
+        for _li, _lag in enumerate(range(-_lag_max, _lag_max + 1)):
+            _i_x = _ux[:, _lag_max - _lag:_T - _lag_max - _lag]
+            _i_y = _uy[:, _lag_max - _lag:_T - _lag_max - _lag]
+            _xc[:, :, _li] = (_i_x @ _j_x.T + _i_y @ _j_y.T) / _i_x.shape[1]
+        _peak_pos = _xc[:, :, _lag_max + 1:].max(axis=2)
+        _peak_neg = _xc[:, :, :_lag_max].max(axis=2)
+        _M = _peak_pos - _peak_neg
+        np.fill_diagonal(_M, 0.0)
+        return _M
+
+    def _asymmetry(_M):
+        return float(np.abs(_M - _M.T).mean() / 2.0)
+
+    _inf_rows = []
+    _rep_inf_mat = None
+    _rep_inf_ids = None
+    _null_asym_example = None
+    _rep_trial = None
+
+    for _tidx, _trial in enumerate(TRIALS):
+        if _trial['group_size'] < 2 or _trial['config'] not in _TEST_CONFIGS:
+            continue
+        _tracks = load_trial_tracks(
+            _trial, tracks_cache=TRACKS_CACHE, apply_orient=True,
+        )
+        if len(_tracks) < 2:
+            continue
+
+        _sids = sorted(_tracks.keys())
+        _n = len(_sids)
+        _dur = _trial['duration_min']
+        _t = np.arange(0, _dur + _DT, _DT)
+        _T = len(_t)
+        if _T < 2 * _MIN_SHIFT + 2 * _LAG_MAX + 30:
+            continue
+        _gx = np.zeros((_n, _T))
+        _gy = np.zeros((_n, _T))
+        for _ci, _sid in enumerate(_sids):
+            _trk = _tracks[_sid]
+            _o = np.argsort(_trk['t'])
+            _gx[_ci] = np.interp(_t, _trk['t'][_o], _trk['gx'][_o])
+            _gy[_ci] = np.interp(_t, _trk['t'][_o], _trk['gy'][_o])
+
+        _kernel = np.ones(15) / 15
+        _vx = np.zeros((_n, _T))
+        _vy = np.zeros((_n, _T))
+        for _ci in range(_n):
+            _vx[_ci] = np.convolve(np.gradient(_gx[_ci], _t), _kernel, mode='same')
+            _vy[_ci] = np.convolve(np.gradient(_gy[_ci], _t), _kernel, mode='same')
+        _mag = np.sqrt(_vx**2 + _vy**2)
+        _mag_safe = np.where(_mag > 1e-9, _mag, 1.0)
+        _ux = _vx / _mag_safe
+        _uy = _vy / _mag_safe
+        # Zero out near-stationary frames so they don't drag the correlation.
+        _ux = np.where(_mag > 0.02, _ux, 0.0)
+        _uy = np.where(_mag > 0.02, _uy, 0.0)
+
+        _M_obs = _influence_matrix(_ux, _uy, _LAG_MAX)
+        _asym_obs = _asymmetry(_M_obs)
+
+        # Vectorised circular shift across all sheep via fancy-indexed gather.
+        _col_idx = np.arange(_T)
+        _null_asym = np.empty(_N_PERMUTATIONS)
+        for _p in range(_N_PERMUTATIONS):
+            _shifts = _rng.integers(_MIN_SHIFT, _T - _MIN_SHIFT, size=_n)
+            _gather = (_col_idx[None, :] - _shifts[:, None]) % _T
+            _row_idx = np.arange(_n)[:, None]
+            _M_null = _influence_matrix(_ux[_row_idx, _gather], _uy[_row_idx, _gather], _LAG_MAX)
+            _null_asym[_p] = _asymmetry(_M_null)
+
+        _p_hi = (np.sum(_null_asym >= _asym_obs) + 1) / (_N_PERMUTATIONS + 1)
+        _p_lo = (np.sum(_null_asym <= _asym_obs) + 1) / (_N_PERMUTATIONS + 1)
+        _p_two = float(2 * min(_p_hi, _p_lo))
+        _null_mean = float(_null_asym.mean())
+        _null_lo = float(np.quantile(_null_asym, 0.025))
+        _null_hi = float(np.quantile(_null_asym, 0.975))
+
+        _inf_rows.append({
+            'Trial': _tidx,
+            'Date': _trial['date'],
+            'Config': _trial['config'],
+            'Assay group': 'CTRL' if _trial['config'].startswith('CTRL') else str(_trial['assay']),
+            'n sheep': _n,
+            'Asymmetry': round(_asym_obs, 4),
+            'Null mean': round(_null_mean, 4),
+            'Null 2.5%': round(_null_lo, 4),
+            'Null 97.5%': round(_null_hi, 4),
+            'p (two-sided)': round(_p_two, 4),
+        })
+
+        if _rep_inf_mat is None and _n >= 3:
+            _rep_inf_mat = _M_obs
+            _rep_inf_ids = _sids
+            _null_asym_example = _null_asym.copy()
+            _rep_trial = _tidx
+
+    inf_df = pd.DataFrame(_inf_rows)
+    rep_inf_mat = _rep_inf_mat
+    rep_inf_ids = _rep_inf_ids
+    null_asym_example = _null_asym_example
+    rep_inf_trial = _rep_trial
+    return inf_df, rep_inf_mat, rep_inf_ids, null_asym_example, rep_inf_trial
+
+
+@app.cell(hide_code=True)
+def _(inf_df, rep_inf_mat, rep_inf_ids, null_asym_example, rep_inf_trial,
+      mo, np, plt):
+    _fig, (_axA, _axB, _axC) = plt.subplots(1, 3, figsize=(15, 4.6))
+
+    # A: influence heatmap
+    if rep_inf_mat is not None:
+        _vmax = float(np.abs(rep_inf_mat).max())
+        _im = _axA.imshow(rep_inf_mat, cmap='RdBu_r', vmin=-_vmax, vmax=_vmax)
+        _axA.set_xticks(range(len(rep_inf_ids)))
+        _axA.set_yticks(range(len(rep_inf_ids)))
+        _axA.set_xticklabels([f'S{_s}' for _s in rep_inf_ids], fontsize=8)
+        _axA.set_yticklabels([f'S{_s}' for _s in rep_inf_ids], fontsize=8)
+        _axA.set_xlabel('Follower j')
+        _axA.set_ylabel('Leader i')
+        _axA.set_title(f'Influence i → j (trial {rep_inf_trial})')
+        _fig.colorbar(_im, ax=_axA, fraction=0.046, pad=0.04)
+
+    # B: null histogram for example trial
+    if null_asym_example is not None and len(inf_df):
+        _row = inf_df[inf_df['Trial'] == rep_inf_trial].iloc[0]
+        _obs = float(_row['Asymmetry'])
+        _p = float(_row['p (two-sided)'])
+        _axB.hist(null_asym_example, bins=40, color='#bbbbbb', edgecolor='k', linewidth=0.3)
+        _axB.axvline(_obs, color='red', lw=1.4, label=f'obs={_obs:.3f}')
+        _axB.set_xlabel('Asymmetry under null')
+        _axB.set_ylabel('Count')
+        _axB.set_title(f'Circular-shift null (trial {rep_inf_trial}, p={_p:.3f})')
+        _axB.legend(fontsize=8)
+
+    # C: observed asymmetry by assay group + null-mean line
+    if len(inf_df):
+        _assays = sorted(
+            [a for a in inf_df['Assay group'].unique() if a != 'CTRL'],
+            key=lambda x: (not x.isdigit(), x),
+        )
+        if (inf_df['Assay group'] == 'CTRL').any():
+            _assays.append('CTRL')
+        _by_a = [inf_df[inf_df['Assay group'] == _a]['Asymmetry'].values for _a in _assays]
+        _axC.boxplot(_by_a, tick_labels=_assays, widths=0.5)
+        _null_med = float(inf_df['Null mean'].median())
+        _axC.axhline(_null_med, color='red', ls='--', lw=0.8,
+                     label=f'Null mean (med={_null_med:.3f})')
+        _axC.set_xlabel('Assay group')
+        _axC.set_ylabel('Asymmetry')
+        _axC.set_title('Directional asymmetry by assay')
+        _axC.legend(fontsize=8)
+
+    _fig.tight_layout()
+    _n_sig = int((inf_df['p (two-sided)'] < 0.05).sum()) if len(inf_df) else 0
+    mo.vstack([
+        _fig,
+        mo.md(
+            f"**{len(inf_df)} trials** tested. "
+            f"{_n_sig} reject the no-directional-influence null at α=0.05 "
+            f"(two-sided, circular-shift, N=2000 perms)."
+        ),
+        mo.ui.table(inf_df),
+    ])
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(
+        "---\n"
+        "## Leadership-rank stability across assays\n\n"
+        "For each social group, average per-sheep frontal leadership fractions "
+        "within each (group, assay) cell, then compute Spearman ρ between every "
+        "pair of assays restricted to the sheep present in both. The mean ρ "
+        "across (group, assay-pair) combinations measures rank stability. "
+        "The null shuffles sheep IDs independently within each (group, assay) "
+        "vector — preserving group and assay marginals while breaking any "
+        "true rank relationship."
+    )
+    return
+
+
+@app.cell(hide_code=True)
+def _(TRIALS, TRACKS_CACHE, load_trial_tracks, np, pd):
+    _TEST_CONFIGS = {'A', 'B', 'C', 'D', 'CTRL_FAR', 'CTRL_BARN'}
+    _N_PERMUTATIONS = 2000
+    _rng = np.random.default_rng(seed=42)
+    _DT = 1.0 / 60.0
+
+    # Aggregate per-sheep leadership fraction per (group_num, assay group)
+    # by collecting per-trial leadership fractions then averaging within cell.
+    _per_trial_lf = []  # rows: group_num, assay group, sheep, lf
+    for _trial in TRIALS:
+        if _trial['group_size'] < 2 or _trial['config'] not in _TEST_CONFIGS:
+            continue
+        _tracks = load_trial_tracks(
+            _trial, tracks_cache=TRACKS_CACHE, apply_orient=True,
+        )
+        if len(_tracks) < 2:
+            continue
+        _sids = sorted(_tracks.keys())
+        _n = len(_sids)
+        _dur = _trial['duration_min']
+        _t = np.arange(0, _dur + _DT, _DT)
+        _gx = np.zeros((_n, len(_t)))
+        _gy = np.zeros((_n, len(_t)))
+        for _ci, _sid in enumerate(_sids):
+            _trk = _tracks[_sid]
+            _o = np.argsort(_trk['t'])
+            _gx[_ci] = np.interp(_t, _trk['t'][_o], _trk['gx'][_o])
+            _gy[_ci] = np.interp(_t, _trk['t'][_o], _trk['gy'][_o])
+        _cx = _gx.mean(axis=0)
+        _cy = _gy.mean(axis=0)
+        _kernel = np.ones(15) / 15
+        _vcx = np.convolve(np.gradient(_cx, _t), _kernel, mode='same')
+        _vcy = np.convolve(np.gradient(_cy, _t), _kernel, mode='same')
+        _vs = np.sqrt(_vcx**2 + _vcy**2)
+        _vss = np.where(_vs > 1e-6, _vs, 1.0)
+        _vnx = _vcx / _vss
+        _vny = _vcy / _vss
+        _dx = _gx - _cx
+        _dy = _gy - _cy
+        _proj = _dx * _vnx + _dy * _vny
+        _moving = _vs > 0.02
+        _leader = np.argmax(_proj, axis=0)
+        _leader[~_moving] = -1
+        _frames = _leader[_leader >= 0]
+        if len(_frames) == 0:
+            continue
+        _counts = np.bincount(_frames, minlength=_n).astype(float)
+        _lf = _counts / len(_frames)
+        _ag = 'CTRL' if _trial['config'].startswith('CTRL') else str(_trial['assay'])
+        for _ci, _sid in enumerate(_sids):
+            _per_trial_lf.append({
+                'group_num': int(_trial['group_num']),
+                'Assay group': _ag,
+                'sheep': _sid,
+                'lf': float(_lf[_ci]),
+            })
+
+    _lf_df = pd.DataFrame(_per_trial_lf)
+    if len(_lf_df) == 0:
+        cell_df = pd.DataFrame()
+        pair_rows = []
+        observed_mean_rho = float('nan')
+        null_mean_rho = np.zeros(0)
+        rank_p = float('nan')
+    else:
+        cell_df = (
+            _lf_df.groupby(['group_num', 'Assay group', 'sheep'])['lf']
+            .mean().reset_index()
+        )
+
+        # Build per-(group, assay) sheep→lf map.
+        _cells = {}
+        for _, _row in cell_df.iterrows():
+            _cells.setdefault(
+                (int(_row['group_num']), _row['Assay group']), {}
+            )[_row['sheep']] = float(_row['lf'])
+
+        # Pre-compute pair metadata + shared-sheep positional indices into
+        # each cell's value pool.
+        _pool_keys = {_k: list(_v.keys()) for _k, _v in _cells.items()}
+        _pool_vals = {_k: np.array(list(_v.values())) for _k, _v in _cells.items()}
+
+        _pairs_meta = []
+        _groups = sorted({_g for (_g, _a) in _cells.keys()})
+        for _gn in _groups:
+            _assays_here = sorted({_a for (_g, _a) in _cells.keys() if _g == _gn})
+            for _i, _a1 in enumerate(_assays_here):
+                for _a2 in _assays_here[_i + 1:]:
+                    _k1, _k2 = (_gn, _a1), (_gn, _a2)
+                    _shared = sorted(set(_pool_keys[_k1]) & set(_pool_keys[_k2]))
+                    if len(_shared) < 3:
+                        continue
+                    _idx1 = np.array([_pool_keys[_k1].index(_s) for _s in _shared])
+                    _idx2 = np.array([_pool_keys[_k2].index(_s) for _s in _shared])
+                    _pairs_meta.append({
+                        'group_num': _gn, 'a1': _a1, 'a2': _a2,
+                        'shared': _shared, 'idx1': _idx1, 'idx2': _idx2,
+                        'k1': _k1, 'k2': _k2, 'n': len(_shared),
+                    })
+
+        def _spearman_fast(_v1, _v2):
+            # Spearman ρ via ordinal ranks (argsort-of-argsort); ~5× faster than
+            # pandas.rank for the small (n≤~10) vectors we have here. Ties in
+            # leadership fractions are extremely rare so ordinal ≈ average rank.
+            _r1 = np.argsort(np.argsort(_v1)).astype(float)
+            _r2 = np.argsort(np.argsort(_v2)).astype(float)
+            _d1 = _r1 - _r1.mean()
+            _d2 = _r2 - _r2.mean()
+            _num = (_d1 * _d2).sum()
+            _den = np.sqrt((_d1 * _d1).sum() * (_d2 * _d2).sum())
+            return float(_num / _den) if _den > 0 else float('nan')
+
+        def _pair_rhos_from_pools(_pools):
+            # Returns rows with rho computed via ordinal Spearman so observed
+            # and null statistics are exactly comparable.
+            _rows = []
+            for _m in _pairs_meta:
+                _v1 = _pools[_m['k1']][_m['idx1']]
+                _v2 = _pools[_m['k2']][_m['idx2']]
+                if np.std(_v1) < 1e-9 or np.std(_v2) < 1e-9:
+                    continue
+                _rho = _spearman_fast(_v1, _v2)
+                if np.isnan(_rho):
+                    continue
+                _rows.append({
+                    'group_num': _m['group_num'],
+                    'a1': _m['a1'], 'a2': _m['a2'],
+                    'n_shared': int(_m['n']),
+                    'rho': float(_rho),
+                })
+            return _rows
+
+        pair_rows = _pair_rhos_from_pools(_pool_vals)
+        if not pair_rows:
+            observed_mean_rho = float('nan')
+            null_mean_rho = np.zeros(0)
+            rank_p = float('nan')
+        else:
+            observed_mean_rho = float(np.mean([_r['rho'] for _r in pair_rows]))
+
+            null_mean_rho = np.empty(_N_PERMUTATIONS)
+            for _p in range(_N_PERMUTATIONS):
+                _shuf_pool = {_k: _rng.permutation(_v) for _k, _v in _pool_vals.items()}
+                _nr = _pair_rhos_from_pools(_shuf_pool)
+                null_mean_rho[_p] = (
+                    float(np.mean([_r['rho'] for _r in _nr])) if _nr else 0.0
+                )
+            _p_hi = (np.sum(null_mean_rho >= observed_mean_rho) + 1) / (_N_PERMUTATIONS + 1)
+            _p_lo = (np.sum(null_mean_rho <= observed_mean_rho) + 1) / (_N_PERMUTATIONS + 1)
+            rank_p = float(2 * min(_p_hi, _p_lo))
+
+    return cell_df, pair_rows, observed_mean_rho, null_mean_rho, rank_p
+
+
+@app.cell(hide_code=True)
+def _(cell_df, pair_rows, observed_mean_rho, null_mean_rho, rank_p,
+      mo, np, pd, plt):
+    _fig, (_axA, _axB) = plt.subplots(1, 2, figsize=(13, 4.6))
+
+    # A: histogram of null mean ρ with observed line
+    if len(null_mean_rho):
+        _null_mean = float(null_mean_rho.mean())
+        _lo, _hi = float(np.quantile(null_mean_rho, 0.025)), float(np.quantile(null_mean_rho, 0.975))
+        _axA.hist(null_mean_rho, bins=40, color='#bbbbbb',
+                  edgecolor='k', linewidth=0.3)
+        _axA.axvline(observed_mean_rho, color='red', lw=1.4,
+                     label=f'obs={observed_mean_rho:.3f}')
+        _axA.axvline(_lo, color='blue', ls='--', lw=0.7)
+        _axA.axvline(_hi, color='blue', ls='--', lw=0.7,
+                     label=f'null 95% [{_lo:.3f}, {_hi:.3f}]')
+        _axA.set_xlabel('Mean Spearman ρ across (group, assay-pair)')
+        _axA.set_ylabel('Count')
+        _axA.set_title(f'Sheep-ID shuffle null (p={rank_p:.3f})')
+        _axA.legend(fontsize=8)
+    else:
+        _axA.text(0.5, 0.5, 'No (group, assay-pair) with ≥3 shared sheep',
+                  ha='center', va='center', transform=_axA.transAxes)
+
+    # B: per-group heatmap of pairwise-assay ρ — pooled into a long table
+    if pair_rows:
+        _pr = pd.DataFrame(pair_rows)
+        _groups = sorted(_pr['group_num'].unique())
+        _assays = sorted(
+            set(_pr['a1']) | set(_pr['a2']),
+            key=lambda x: (x == 'CTRL', not x.isdigit(), x),
+        )
+        _mat = np.full((len(_groups), len(_assays) * (len(_assays) - 1) // 2), np.nan)
+        _col_labels = []
+        _ci = 0
+        for _i, _a1 in enumerate(_assays):
+            for _a2 in _assays[_i + 1:]:
+                _col_labels.append(f'{_a1}↔{_a2}')
+                for _ri, _g in enumerate(_groups):
+                    _sub = _pr[(_pr['group_num'] == _g) & (
+                        ((_pr['a1'] == _a1) & (_pr['a2'] == _a2)) |
+                        ((_pr['a1'] == _a2) & (_pr['a2'] == _a1))
+                    )]
+                    if len(_sub):
+                        _mat[_ri, _ci] = float(_sub['rho'].iloc[0])
+                _ci += 1
+        _im = _axB.imshow(_mat, cmap='RdBu_r', vmin=-1, vmax=1, aspect='auto')
+        _axB.set_xticks(range(len(_col_labels)))
+        _axB.set_xticklabels(_col_labels, rotation=45, ha='right', fontsize=8)
+        _axB.set_yticks(range(len(_groups)))
+        _axB.set_yticklabels([f'G{_g}' for _g in _groups])
+        _axB.set_xlabel('Assay pair')
+        _axB.set_ylabel('Group')
+        _axB.set_title('Per-group pairwise ρ')
+        _fig.colorbar(_im, ax=_axB, fraction=0.046, pad=0.04)
+    else:
+        _axB.text(0.5, 0.5, 'No pair data', ha='center', va='center',
+                  transform=_axB.transAxes)
+
+    _fig.tight_layout()
+    mo.vstack([
+        _fig,
+        mo.md(
+            f"**Observed mean ρ = {observed_mean_rho:.3f}** across {len(pair_rows)} "
+            f"(group, assay-pair) combinations. Two-sided permutation p = {rank_p:.3f} "
+            f"(N=2000)."
+        ),
+        mo.ui.table(pd.DataFrame(pair_rows)) if pair_rows else mo.md("*No pair data.*"),
+    ])
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(
+        "---\n"
+        "## Leader-vs-pioneer overlap\n\n"
+        "Per trial, compute the Spearman rank correlation between two "
+        "per-sheep rankings: (a) frontal leadership fraction, and (b) "
+        "pioneer-visit counts (first-arrival to reward sites). A high ρ "
+        "means the sheep that leads from the front is also the sheep that "
+        "first arrives at sites. Null per trial: 2000 permutations of the "
+        "pioneer-rank vector against the (fixed) leadership-rank vector."
+    )
+    return
+
+
+@app.cell(hide_code=True)
+def _(TRIALS, TRACKS_CACHE, load_trial_tracks, detect_site_visits,
+      DATA_DIR, np, pd):
+    _TEST_CONFIGS = {'A', 'B', 'C', 'D', 'CTRL_FAR', 'CTRL_BARN'}
+    _N_PERMUTATIONS = 2000
+    _rng = np.random.default_rng(seed=42)
+    _DT = 1.0 / 60.0
+    _RADIUS = 0.5
+
+    _rdf = pd.read_csv(DATA_DIR / "fitted_reward_sites.csv")
+
+    def _spearman_fast(_v1, _v2):
+        _r1 = np.argsort(np.argsort(_v1)).astype(float)
+        _r2 = np.argsort(np.argsort(_v2)).astype(float)
+        _d1 = _r1 - _r1.mean()
+        _d2 = _r2 - _r2.mean()
+        _num = (_d1 * _d2).sum()
+        _den = np.sqrt((_d1 * _d1).sum() * (_d2 * _d2).sum())
+        return float(_num / _den) if _den > 0 else float('nan')
+
+    _rows = []
+    _null_pool = []  # pool of all per-trial null rhos
+    _obs_rhos = []
+
+    for _tidx, _trial in enumerate(TRIALS):
+        if _trial['group_size'] < 2 or _trial['config'] not in _TEST_CONFIGS:
+            continue
+        _tracks = load_trial_tracks(
+            _trial, tracks_cache=TRACKS_CACHE, apply_orient=True,
+        )
+        if len(_tracks) < 2:
+            continue
+        _sids = sorted(_tracks.keys())
+        _n = len(_sids)
+        _dur = _trial['duration_min']
+        _t = np.arange(0, _dur + _DT, _DT)
+        _gx = np.zeros((_n, len(_t)))
+        _gy = np.zeros((_n, len(_t)))
+        for _ci, _sid in enumerate(_sids):
+            _trk = _tracks[_sid]
+            _o = np.argsort(_trk['t'])
+            _gx[_ci] = np.interp(_t, _trk['t'][_o], _trk['gx'][_o])
+            _gy[_ci] = np.interp(_t, _trk['t'][_o], _trk['gy'][_o])
+
+        _cx = _gx.mean(axis=0)
+        _cy = _gy.mean(axis=0)
+        _kernel = np.ones(15) / 15
+        _vcx = np.convolve(np.gradient(_cx, _t), _kernel, mode='same')
+        _vcy = np.convolve(np.gradient(_cy, _t), _kernel, mode='same')
+        _vs = np.sqrt(_vcx**2 + _vcy**2)
+        _vss = np.where(_vs > 1e-6, _vs, 1.0)
+        _vnx = _vcx / _vss
+        _vny = _vcy / _vss
+        _dx = _gx - _cx
+        _dy = _gy - _cy
+        _proj = _dx * _vnx + _dy * _vny
+        _moving = _vs > 0.02
+        _leader = np.argmax(_proj, axis=0)
+        _leader[~_moving] = -1
+        _frames = _leader[_leader >= 0]
+        if len(_frames) == 0:
+            continue
+        _counts = np.bincount(_frames, minlength=_n).astype(float)
+        _lf = _counts / len(_frames)
+
+        # Pioneer counts: first arrival to each site.
+        _visits = detect_site_visits(
+            _tracks, _trial['field'], radius=_RADIUS,
+            reward_sites_df=_rdf,
+        )
+        _pioneer = {_sid: 0 for _sid in _sids}
+        for _lbl, _vlist in _visits.items():
+            if not _vlist:
+                continue
+            _first = min(_vlist, key=lambda x: x[1])
+            if _first[0] in _pioneer:
+                _pioneer[_first[0]] += 1
+        _pi = np.array([_pioneer[_sid] for _sid in _sids], dtype=float)
+
+        if np.std(_lf) < 1e-9 or np.std(_pi) < 1e-9:
+            continue
+        if _n < 3:
+            continue
+
+        _rho = _spearman_fast(_lf, _pi)
+        if np.isnan(_rho):
+            continue
+
+        _r_lead = np.argsort(np.argsort(_lf)).astype(float)
+        _null = np.empty(_N_PERMUTATIONS)
+        for _p in range(_N_PERMUTATIONS):
+            _pi_perm = _rng.permutation(_pi)
+            _r2 = np.argsort(np.argsort(_pi_perm)).astype(float)
+            _d1 = _r_lead - _r_lead.mean()
+            _d2 = _r2 - _r2.mean()
+            _num = (_d1 * _d2).sum()
+            _den = np.sqrt((_d1 * _d1).sum() * (_d2 * _d2).sum())
+            _null[_p] = float(_num / _den) if _den > 0 else 0.0
+
+        _p_hi = (np.sum(_null >= _rho) + 1) / (_N_PERMUTATIONS + 1)
+        _p_lo = (np.sum(_null <= _rho) + 1) / (_N_PERMUTATIONS + 1)
+        _p_two = float(2 * min(_p_hi, _p_lo))
+
+        _rows.append({
+            'Trial': _tidx,
+            'Date': _trial['date'],
+            'Config': _trial['config'],
+            'Assay group': 'CTRL' if _trial['config'].startswith('CTRL') else str(_trial['assay']),
+            'n sheep': _n,
+            'rho': round(float(_rho), 4),
+            'null mean': round(float(_null.mean()), 4),
+            'null 2.5%': round(float(np.quantile(_null, 0.025)), 4),
+            'null 97.5%': round(float(np.quantile(_null, 0.975)), 4),
+            'p (two-sided)': round(_p_two, 4),
+        })
+        _null_pool.extend(_null.tolist())
+        _obs_rhos.append(_rho)
+
+    pioneer_df = pd.DataFrame(_rows)
+    null_pool = np.array(_null_pool) if _null_pool else np.zeros(0)
+    obs_rhos = np.array(_obs_rhos) if _obs_rhos else np.zeros(0)
+    return pioneer_df, null_pool, obs_rhos
+
+
+@app.cell(hide_code=True)
+def _(pioneer_df, null_pool, obs_rhos, mo, np, plt):
+    _fig, (_axA, _axB, _axC) = plt.subplots(1, 3, figsize=(15, 4.6))
+
+    # A: per-trial rho boxplot by Assay group
+    if len(pioneer_df):
+        _assays = sorted(
+            [a for a in pioneer_df['Assay group'].unique() if a != 'CTRL'],
+            key=lambda x: (not x.isdigit(), x),
+        )
+        if (pioneer_df['Assay group'] == 'CTRL').any():
+            _assays.append('CTRL')
+        _by_a = [pioneer_df[pioneer_df['Assay group'] == _a]['rho'].values
+                 for _a in _assays]
+        _axA.boxplot(_by_a, tick_labels=_assays, widths=0.5)
+        _axA.axhline(0, color='k', lw=0.4)
+        _axA.set_xlabel('Assay group')
+        _axA.set_ylabel('Spearman ρ (leader vs pioneer)')
+        _axA.set_title('Leader-pioneer overlap per trial')
+        _axA.set_ylim(-1.05, 1.05)
+    else:
+        _axA.text(0.5, 0.5, 'No trials', ha='center', va='center',
+                  transform=_axA.transAxes)
+
+    # B: pooled null distribution vs pooled observed mean
+    if len(null_pool):
+        _axB.hist(null_pool, bins=60, color='#bbbbbb', edgecolor='k', linewidth=0.3,
+                  label=f'pooled null (n={len(null_pool)})')
+        _obs_mean = float(obs_rhos.mean())
+        _null_mean = float(null_pool.mean())
+        _axB.axvline(_obs_mean, color='red', lw=1.4,
+                     label=f'mean obs ρ = {_obs_mean:.3f}')
+        _axB.axvline(_null_mean, color='blue', ls='--', lw=0.8,
+                     label=f'mean null ρ = {_null_mean:.3f}')
+        _axB.set_xlabel('Spearman ρ')
+        _axB.set_ylabel('Count')
+        _axB.set_title('Pooled null vs observed')
+        _axB.legend(fontsize=8)
+
+    # C: trial-level outcomes — bar of ρ sorted with red shading for p<0.05
+    if len(pioneer_df):
+        _sorted = pioneer_df.sort_values('rho').reset_index(drop=True)
+        _colors = ['#E8823A' if _p < 0.05 else '#3B7DD8'
+                   for _p in _sorted['p (two-sided)']]
+        _axC.bar(range(len(_sorted)), _sorted['rho'], color=_colors,
+                 edgecolor='k', linewidth=0.3)
+        _axC.axhline(0, color='k', lw=0.4)
+        _axC.set_xlabel('Trial (sorted by ρ)')
+        _axC.set_ylabel('Spearman ρ')
+        _axC.set_title(f'Per-trial ρ (orange = p<0.05, n_sig={(pioneer_df["p (two-sided)"]<0.05).sum()})')
+        _axC.set_ylim(-1.05, 1.05)
+
+    _fig.tight_layout()
+    _n_sig = int((pioneer_df['p (two-sided)'] < 0.05).sum()) if len(pioneer_df) else 0
+    _med = float(pioneer_df['rho'].median()) if len(pioneer_df) else float('nan')
+    mo.vstack([
+        _fig,
+        mo.md(
+            f"**{len(pioneer_df)} trials** tested. Median ρ = {_med:.3f}. "
+            f"{_n_sig} reject the null at α=0.05 (two-sided, N=2000 perms per trial)."
+        ),
+        mo.ui.table(pioneer_df),
     ])
     return
 
