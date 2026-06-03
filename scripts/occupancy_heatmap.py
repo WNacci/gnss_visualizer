@@ -117,19 +117,18 @@ def _():
 @app.cell(hide_code=True)
 def _(pd):
     """Build arena coordinate transforms from fitted reward sites."""
-    from gps_analysis import latlon_to_grid, apply_orientation, build_arena_transforms, DATA_DIR
-    reward_sites_df = pd.read_csv(DATA_DIR / "fitted_reward_sites.csv")
+    from gps_analysis import latlon_to_grid, apply_orientation, build_arena_transforms, DATA_DIR as _DATA_DIR
+    reward_sites_df = pd.read_csv(_DATA_DIR / "fitted_reward_sites.csv")
     ARENA_TRANSFORMS = build_arena_transforms(reward_sites_df)
     return (reward_sites_df, ARENA_TRANSFORMS, latlon_to_grid, apply_orientation)
 
 
 @app.cell(hide_code=True)
-def _(TRIALS, detect_format_and_load):
+def _(TRIALS, detect_format_and_load, Path):
     """Pre-load all GNSS directories once at startup (does NOT depend on selected_indices)."""
     from concurrent.futures import ThreadPoolExecutor as _TPE
-    from gps_analysis import DATA_DIR
-    from pathlib import Path
-    _base = DATA_DIR / "gnss"
+    from gps_analysis import DATA_DIR as _DATA_DIR
+    _base = _DATA_DIR / "gnss"
     _all_dirs = sorted(set(
         str(_base / f"{int(t['date'].split('-')[2])}-02-26")
         for t in TRIALS
@@ -318,11 +317,11 @@ def _(
     Auto-detects the correct field transform if the CSV label is wrong.
     Averages gx/gy for sheep carrying 2 GPS devices.
     """
-    from gps_analysis import CONFIG_TRANSFORMS, DATA_DIR
+    from gps_analysis import CONFIG_TRANSFORMS as _CONFIG_TRANSFORMS, DATA_DIR as _DATA_DIR
 
     def _get_orientation(config):
         if transform_mode_widget.value == "Per configuration":
-            return CONFIG_TRANSFORMS.get(config, (0, "none"))
+            return _CONFIG_TRANSFORMS.get(config, (0, "none"))
         return (0, "none")
 
     def _in_arena_count(lats, lons, field_key):
@@ -353,7 +352,7 @@ def _(
         _devs, _assay, _notes = _t["devices"], _t["assay"], _t["notes"]
         _gnum, _gsize = _t["group_num"], _t["group_size"]
         _day = int(_date.split("-")[2])
-        _path_key = str(DATA_DIR / "gnss" / f"{_day}-02-26")
+        _path_key = str(_DATA_DIR / "gnss" / f"{_day}-02-26")
         _raw = GPS_CACHE.get(_path_key, {})
         if not _raw:
             _n_no_data += 1
