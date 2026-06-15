@@ -55,7 +55,7 @@ cp "$SHARING/example_usage.py"     "$STAGE/"
 cp "$SHARING/README.md"            "$STAGE/"
 
 # 5) Compress.
-OUTPUT="${OUTPUT:-/tmp/sheep_gnss_2026.tar.zst}"
+OUTPUT="${OUTPUT:-$SHARING/sheep_gnss_2026.tar.zst}"
 echo "==> Compressing to $OUTPUT"
 if command -v zstd >/dev/null 2>&1; then
     tar --use-compress-program="zstd -19 -T0" \
