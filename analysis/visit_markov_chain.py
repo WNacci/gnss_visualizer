@@ -24,13 +24,16 @@ import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.patches import FancyArrowPatch, Circle
 from pathlib import Path
+from scipy.optimize import minimize_scalar
 
 from gps_analysis import (
     build_trials,
     build_tracks_cache,
     load_trial_tracks,
     detect_site_visits,
+    SITE_GRID,
     SITE_LABELS,
     BAITED_CANONICAL,
 )
@@ -54,6 +57,14 @@ LATE_MIN_ASSAY = 5      # late cohort:  assay >= 5
 N_SITES = len(SITE_LABELS)
 SITE_IDX = {lbl: i for i, lbl in enumerate(SITE_LABELS)}
 BAITED_IDX = np.array([SITE_IDX[s] for s in sorted(BAITED_CANONICAL)])
+UNBAITED_IDX = np.array([i for i in range(N_SITES) if i not in set(BAITED_IDX)])
+
+# Canonical (oriented) site positions in metres (grid units x 10) and the
+# inter-site distance matrix, used to build the geometry / distance-decay null.
+POS = np.array([SITE_GRID[lbl] for lbl in SITE_LABELS], dtype=float) * 10.0
+_diff = POS[:, None, :] - POS[None, :, :]
+DIST = np.sqrt((_diff ** 2).sum(axis=2))           # metres, shape (N, N)
+N_BOOT = 2000                                       # bootstrap resamples over trials
 
 
 # ===========================================================================
@@ -169,6 +180,93 @@ def baited_in_mass(C):
     if total == 0:
         return np.nan
     return C[:, BAITED_IDX].sum() / total
+
+
+# ---------------------------------------------------------------------------
+# Geometry / distance-decay ("gravity") null.
+#
+# Baited-in transition mass is confounded by spatial position: central sites
+# and sites that lie *between* baited sites collect transitions regardless of
+# reward. To isolate a reward preference we compare the data against a gravity
+# model where the probability of moving i -> j depends only on inter-site
+# distance, P_grav(i->j) ∝ exp(-D_ij / lambda) over j != i. lambda is fit by
+# maximum likelihood to the observed transitions, so the null reproduces the
+# overall trip-length profile; any *excess* inflow to baited sites beyond this
+# null is geometry-controlled evidence of reward-directed routing.
+# ---------------------------------------------------------------------------
+def gravity_matrix(lam):
+    """Row-stochastic distance-decay transition matrix, self-transitions zeroed."""
+    W = np.exp(-DIST / lam)
+    np.fill_diagonal(W, 0.0)
+    rs = W.sum(axis=1, keepdims=True)
+    return W / rs
+
+
+def fit_gravity_lambda(C):
+    """MLE of the distance-decay length scale lambda (metres) from counts C."""
+    def neg_ll(lam):
+        if lam <= 0:
+            return np.inf
+        P = gravity_matrix(lam)
+        mask = C > 0
+        return -float((C[mask] * np.log(P[mask] + 1e-300)).sum())
+    res = minimize_scalar(neg_ll, bounds=(1.0, 500.0), method="bounded")
+    return float(res.x)
+
+
+def expected_baited_in(C, P_grav):
+    """Geometry-expected transition mass into baited sites for count matrix C.
+
+    Each from-site is weighted by how often it is actually departed (its row sum
+    in C), then routed to destinations by the gravity model.
+    """
+    rs = C.sum(axis=1)
+    total = rs.sum()
+    if total == 0:
+        return np.nan
+    w = rs / total
+    return float((w[:, None] * P_grav)[:, BAITED_IDX].sum())
+
+
+def inflow_vectors(C, P_grav):
+    """Observed and geometry-expected inflow probability per site (length N)."""
+    total = C.sum()
+    if total == 0:
+        return np.full(N_SITES, np.nan), np.full(N_SITES, np.nan)
+    obs = C.sum(axis=0) / total
+    rs = C.sum(axis=1)
+    w = rs / rs.sum()
+    exp = (w[:, None] * P_grav).sum(axis=0)
+    return obs, exp
+
+
+def geometry_excess_bootstrap(sequences, lam, n_boot=N_BOOT, seed=SEED):
+    """Bootstrap (over trials) the geometry-controlled baited-in excess.
+
+    Excess = observed baited-in mass - gravity-expected baited-in mass, using a
+    fixed lambda. Returns (excess_obs, lo95, hi95, p_one_sided_gt0, n_seqs).
+    """
+    seqs = [s for s in sequences if len(s) >= 2]
+    if not seqs:
+        return (np.nan, np.nan, np.nan, np.nan, 0)
+    P_grav = gravity_matrix(lam)
+
+    def _excess(seq_list):
+        C = counts_from_sequences(seq_list)
+        if C.sum() == 0:
+            return np.nan
+        return baited_in_mass(C) - expected_baited_in(C, P_grav)
+
+    obs = _excess(seqs)
+    rng = np.random.default_rng(seed)
+    boot = np.empty(n_boot)
+    idx = np.arange(len(seqs))
+    for k in range(n_boot):
+        pick = rng.choice(idx, size=len(seqs), replace=True)
+        boot[k] = _excess([seqs[i] for i in pick])
+    lo, hi = np.nanpercentile(boot, [2.5, 97.5])
+    p_gt0 = float((np.sum(boot <= 0) + 1) / (n_boot + 1))  # one-sided: excess>0
+    return (float(obs), float(lo), float(hi), p_gt0, len(seqs))
 
 
 def shuffle_sequence(seq, rng):
@@ -339,6 +437,38 @@ print(f"  LATE - EARLY baited-in difference: obs={diff_obs:+.3f}, "
 
 
 # ===========================================================================
+# Geometry-controlled test: distance-decay (gravity) null
+# ===========================================================================
+print("\nGeometry / distance-decay (gravity) null...")
+LAMBDA = fit_gravity_lambda(C_all)
+P_grav = gravity_matrix(LAMBDA)
+grav_baited_in = expected_baited_in(C_all, P_grav)
+obs_in, exp_in = inflow_vectors(C_all, P_grav)
+print(f"  Fitted distance-decay scale lambda = {LAMBDA:.1f} m.")
+print(f"  Baited-in mass: observed {obs_a:.3f} vs geometry-expected "
+      f"{grav_baited_in:.3f}.")
+
+gx_obs, gx_lo, gx_hi, gx_p, gx_n = geometry_excess_bootstrap(all_seqs, LAMBDA)
+ge_obs, ge_lo, ge_hi, ge_p, _ = geometry_excess_bootstrap(early_seqs, LAMBDA)
+gl_obs, gl_lo, gl_hi, gl_p, _ = geometry_excess_bootstrap(late_seqs, LAMBDA)
+print(f"  Geometry-controlled excess (obs - gravity), bootstrap over trials:")
+print(f"    ALL  : {gx_obs:+.3f} [{gx_lo:+.3f}, {gx_hi:+.3f}], p(excess>0)={gx_p:.4f}")
+print(f"    EARLY: {ge_obs:+.3f} [{ge_lo:+.3f}, {ge_hi:+.3f}], p={ge_p:.4f}")
+print(f"    LATE : {gl_obs:+.3f} [{gl_lo:+.3f}, {gl_hi:+.3f}], p={gl_p:.4f}")
+
+# Per-site excess inflow (observed - geometry-expected), baited vs unbaited.
+excess_in = obs_in - exp_in
+baited_excess_mean = float(np.nanmean(excess_in[BAITED_IDX]))
+unbaited_excess_mean = float(np.nanmean(excess_in[UNBAITED_IDX]))
+print(f"  Mean per-site inflow excess: baited {baited_excess_mean:+.4f} vs "
+      f"unbaited {unbaited_excess_mean:+.4f}.")
+order = np.argsort(excess_in)[::-1]
+print("  Top inflow-excess sites: " + ", ".join(
+    f"{SITE_LABELS[i]}{'*' if i in set(BAITED_IDX) else ''}={excess_in[i]:+.3f}"
+    for i in order[:5]))
+
+
+# ===========================================================================
 # Figure: transition-probability heatmap (pooled, early, late)
 # ===========================================================================
 print("\nGenerating transition heatmap...")
@@ -375,6 +505,68 @@ print("  -> visit_markov_chain")
 
 
 # ===========================================================================
+# Figure: arena MAP with transition traces (directed edges weighted by P)
+# ===========================================================================
+print("Generating arena transition map...")
+GRID = POS / 10.0          # back to 0-5 grid coords for plotting
+P_THRESH = 0.06            # only draw edges above this probability (declutter)
+
+
+def draw_transition_map(ax, C, title):
+    P = row_normalise(C)
+    total = C.sum()
+    inflow = C.sum(axis=0) / total if total > 0 else np.zeros(N_SITES)
+    # Arena frame.
+    ax.add_patch(plt.Rectangle((0, 0), 5, 5, fill=False, ec="#cccccc", lw=1.0))
+    ax.set_xlim(-0.4, 5.4)
+    ax.set_ylim(-0.4, 5.4)
+    ax.set_aspect("equal")
+    ax.set_xticks([]); ax.set_yticks([])
+    ax.set_title(title, fontsize=10)
+    # Directed edges (curved so i->j and j->i don't overlap).
+    for i in range(N_SITES):
+        for j in range(N_SITES):
+            if i == j or P[i, j] < P_THRESH:
+                continue
+            to_baited = j in set(BAITED_IDX)
+            ax.add_patch(FancyArrowPatch(
+                GRID[i], GRID[j],
+                connectionstyle="arc3,rad=0.12",
+                arrowstyle="-|>", mutation_scale=8,
+                lw=0.4 + 4.0 * P[i, j],
+                alpha=min(0.9, 0.25 + P[i, j]),
+                color="#B8860B" if to_baited else "#9aa0a6",
+                zorder=2 if to_baited else 1))
+    # Nodes: size ∝ inflow, baited gold.
+    for k in range(N_SITES):
+        baited = k in set(BAITED_IDX)
+        ax.add_patch(Circle(
+            GRID[k], 0.16 + 1.1 * inflow[k],
+            fc="#E8B83D" if baited else "#e6e6e6",
+            ec="#B8860B" if baited else "#888", lw=1.0, zorder=3))
+        ax.text(GRID[k, 0], GRID[k, 1], SITE_LABELS[k], ha="center", va="center",
+                fontsize=6.5, zorder=4, fontweight="bold" if baited else "normal")
+
+
+fig, axes = plt.subplots(1, 3, figsize=(13.5, 4.8))
+for ax, C, ttl in zip(
+        axes,
+        [C_all, counts_from_sequences(early_seqs), counts_from_sequences(late_seqs)],
+        [f"Pooled (n={len(all_seqs)})",
+         f"Early assay<= {EARLY_MAX_ASSAY} (n={n_e})",
+         f"Late assay>= {LATE_MIN_ASSAY} (n={n_l})"]):
+    draw_transition_map(ax, C, ttl)
+fig.suptitle("Inter-site transition probabilities on the arena "
+             f"(edges P>= {P_THRESH}; baited A1/A2/A3 gold; node size ∝ inflow)",
+             fontsize=11)
+fig.tight_layout(rect=[0, 0, 1, 0.95])
+fig.savefig(FIGDIR / "visit_markov_map.pdf")
+fig.savefig(FIGDIR / "visit_markov_map.png")
+plt.close(fig)
+print("  -> visit_markov_map")
+
+
+# ===========================================================================
 # FINDINGS
 # ===========================================================================
 def verdict(obs, null_mean, p):
@@ -387,6 +579,9 @@ def verdict(obs, null_mean, p):
 
 print("\n" + "=" * 70)
 print("FINDINGS:")
+print(f"- Frame: visit sequences are built on canonically ORIENTED tracks "
+      f"(apply_orient=True), so baited sites are always {sorted(BAITED_CANONICAL)} "
+      f"and the transition matrix is in the transformed frame.")
 print(f"- Pooled over {len(all_seqs)} Phase-2 test trials ({n_trans} inter-site "
       f"transitions), movement between sites is structured: the row-weighted "
       f"transition entropy is {H_trans:.2f} bits vs a maximum of "
@@ -395,17 +590,22 @@ print(f"- Transition mass INTO baited sites (A1/A2/A3) = {obs_a:.3f}; under a "
       f"within-trial visit-order shuffle the null is {nm_a:.3f} "
       f"[{lo_a:.3f}, {hi_a:.3f}] -> {verdict(obs_a, nm_a, p_a)}. "
       f"(Baited sites are 3/{N_SITES} = {3/N_SITES:.3f} of all sites.)")
+print(f"- GEOMETRY CONTROL: baited sites are spatially central, so the order-"
+      f"shuffle test above is confounded by position. Against a distance-decay "
+      f"(gravity) null (lambda={LAMBDA:.0f} m), geometry alone predicts "
+      f"{grav_baited_in:.3f} baited-in mass; the observed excess is "
+      f"{gx_obs:+.3f} [{gx_lo:+.3f}, {gx_hi:+.3f}] "
+      f"({'baited sites OVER-visited beyond geometry' if gx_p < 0.05 and gx_obs > 0 else 'not distinguishable from geometry'}, "
+      f"bootstrap p={gx_p:.3f}). Mean per-site inflow excess: baited "
+      f"{baited_excess_mean:+.4f} vs unbaited {unbaited_excess_mean:+.4f}.")
 if not np.isnan(pi_baited):
     print(f"- The chain's stationary distribution places {pi_baited:.3f} of its "
-          f"mass on baited sites (uniform = {3/N_SITES:.3f}), indicating baited "
-          f"sites are movement attractors.")
-print(f"- Cohort comparison: early (assay<= {EARLY_MAX_ASSAY}) baited-in mass "
-      f"{obs_e:.3f} ({verdict(obs_e, nm_e, p_e)}); late (assay>= {LATE_MIN_ASSAY}) "
-      f"{obs_l:.3f} ({verdict(obs_l, nm_l, p_l)}). Late-minus-early difference "
-      f"{diff_obs:+.3f} is {verdict(diff_obs, diff_nm, diff_p).split(' (')[0]} "
-      f"(p={diff_p:.3f}).")
-exp_dir = ("develop stronger" if diff_obs > 0 else "do not develop stronger")
-exp_sig = "" if diff_p < 0.05 else " though the cohort difference is not significant"
-print(f"- Interpretation: experienced groups {exp_dir} preferred baited "
-      f"transitions{exp_sig}.")
+          f"mass on baited sites (uniform = {3/N_SITES:.3f}); note this too "
+          f"partly reflects baited-site centrality (see geometry control).")
+print(f"- Learning: late-cohort geometry-controlled excess {gl_obs:+.3f} "
+      f"(p={gl_p:.3f}) vs early {ge_obs:+.3f} (p={ge_p:.3f}); order-shuffle "
+      f"late-minus-early baited-in difference {diff_obs:+.3f} "
+      f"{verdict(diff_obs, diff_nm, diff_p).split(' (')[0]} (p={diff_p:.3f}).")
+print(f"- See figures/visit_markov_map.png for the transition traces on the arena "
+      f"(pooled / early / late).")
 print("=" * 70)
